@@ -83,29 +83,25 @@ export function getLanguage(value: string): Language {
 }
 
 /**
- * Returns the Whisper `prompt` string that guides transcription for a given source language.
- * For Darija variants this is critical — without it Whisper tends to output MSA.
+ * Returns the Whisper `prompt` string for a given source language.
+ *
+ * IMPORTANT: Whisper's prompt parameter is a vocabulary/style hint, NOT an instruction field.
+ * It should contain short sample text in the audio's language to prime the model's vocabulary.
+ * Long English instructions will be treated as preceding spoken content and appear as subtitles.
+ *
+ * For Darija we pass common dialect words in Arabic script so Whisper stays in dialect
+ * rather than normalizing to MSA.
  */
 export function getWhisperPrompt(sourceLangValue: string): string {
   switch (sourceLangValue) {
     case "darija-ma":
-      return (
-        "This audio is in Moroccan Darija, a North African Arabic dialect spoken in Morocco. " +
-        "Moroccan Darija heavily mixes Arabic with French and sometimes Spanish loanwords. " +
-        "It is distinct from Modern Standard Arabic and Egyptian Arabic. " +
-        "Transcribe exactly as spoken, preserving the dialect. " +
-        "Do not normalize to Modern Standard Arabic."
-      );
+      // Common Moroccan Darija vocabulary — guides Whisper to stay in dialect
+      return "واش، بزاف، مزيان، والو، دابا، راه، هاذ، كاين، درت، حشومة، شكون، فين، كيفاش، علاش، بغيت";
     case "darija-dz":
-      return (
-        "This audio is in Algerian Darija, a North African Arabic dialect spoken in Algeria. " +
-        "Algerian Darija mixes Arabic with French loanwords and Tamazight (Berber) words. " +
-        "It is distinct from Modern Standard Arabic and Moroccan Darija. " +
-        "Transcribe exactly as spoken, preserving the dialect. " +
-        "Do not normalize to Modern Standard Arabic."
-      );
+      // Common Algerian Darija vocabulary
+      return "واش، يزر، بزاف، والو، كيما، رواح، يلاه، حبيبي، كاين، وين، علاش، كيفاش، نتا، هكا، درت";
     case "msa":
-      return "This audio is in Modern Standard Arabic (Fusha). Transcribe accurately.";
+      return "بسم الله الرحمن الرحيم، والسلام عليكم،";
     default:
       return "";
   }
@@ -121,19 +117,19 @@ export function getTranslationPrompt(
   const targetInstructions = getTargetInstructions(targetLang.value);
 
   return (
-    `You are a professional subtitle translator specializing in translating spoken content.\n\n` +
-    `Source language: ${sourceLang.promptName}\n` +
-    `Target language: ${targetLang.promptName}\n\n` +
+    `You are a subtitle translator. You translate spoken subtitle segments.\n\n` +
+    `Source: ${sourceLang.promptName}\n` +
+    `Target: ${targetLang.promptName}\n\n` +
     `${getSourceInstructions(sourceLang.value)}` +
     `${targetInstructions}\n\n` +
-    `RULES:\n` +
-    `- You will receive an array of subtitle segment objects, each with an "index" and "text" field.\n` +
-    `- Translate ONLY the "text" field of each segment. Keep the "index" field unchanged.\n` +
-    `- Preserve the natural spoken flow — subtitles should read naturally, not like a literal dictionary translation.\n` +
-    `- Keep translations concise — subtitles must be readable on screen.\n` +
-    `- Do NOT merge or split segments. Return exactly the same number of segments.\n` +
-    `- Return a valid JSON array with the same structure: [{"index": N, "text": "translation"}, ...]\n` +
-    `- Return ONLY the JSON array. No explanation, no markdown, no code fences.`
+    `INPUT: A JSON array of objects with "index" (integer) and "text" (string) fields.\n` +
+    `OUTPUT: A JSON array with the same "index" values and translated "text" values.\n\n` +
+    `STRICT RULES:\n` +
+    `- Output ONLY the raw JSON array. No prose, no markdown, no code fences, no explanations.\n` +
+    `- Your entire response must be parseable by JSON.parse().\n` +
+    `- Preserve every segment — same count, same index values, same order.\n` +
+    `- Translate only the "text" field. Never modify "index".\n` +
+    `- Keep each translation concise and natural for on-screen reading.`
   );
 }
 
