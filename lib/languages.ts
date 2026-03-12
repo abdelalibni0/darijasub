@@ -122,14 +122,17 @@ export function getTranslationPrompt(
     `Target: ${targetLang.promptName}\n\n` +
     `${getSourceInstructions(sourceLang.value)}` +
     `${targetInstructions}\n\n` +
-    `INPUT: A JSON array of objects with "index" (integer) and "text" (string) fields.\n` +
-    `OUTPUT: A JSON array with the same "index" values and translated "text" values.\n\n` +
-    `STRICT RULES:\n` +
-    `- Output ONLY the raw JSON array. No prose, no markdown, no code fences, no explanations.\n` +
-    `- Your entire response must be parseable by JSON.parse().\n` +
-    `- Preserve every segment — same count, same index values, same order.\n` +
-    `- Translate only the "text" field. Never modify "index".\n` +
-    `- Keep each translation concise and natural for on-screen reading.`
+    `YOUR RESPONSE MUST BE A SINGLE RAW JSON ARRAY AND NOTHING ELSE.\n` +
+    `Do not write any text before the "[". Do not write any text after the "]".\n` +
+    `Do not use markdown. Do not use code fences. Do not explain anything.\n` +
+    `The very first character of your response must be "[" and the very last must be "]".\n\n` +
+    `Input format: [{"index": 1, "text": "..."}, {"index": 2, "text": "..."}, ...]\n` +
+    `Output format: [{"index": 1, "text": "<translation>"}, {"index": 2, "text": "<translation>"}, ...]\n\n` +
+    `Rules:\n` +
+    `- Return exactly the same number of objects as you received.\n` +
+    `- Keep every "index" value unchanged.\n` +
+    `- Translate only the "text" value of each object.\n` +
+    `- Keep translations concise and natural for on-screen reading.`
   );
 }
 

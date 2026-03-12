@@ -127,11 +127,7 @@ async function translateSegments(
       model: "claude-sonnet-4-6",
       max_tokens: 4096,
       system: systemPrompt,
-      messages: [
-        { role: "user", content: JSON.stringify(input) },
-        // Prefill forces Claude to start mid-JSON-array — it cannot output any preamble
-        { role: "assistant", content: "[" },
-      ],
+      messages: [{ role: "user", content: JSON.stringify(input) }],
     });
 
     const rawContent = message.content[0];
@@ -141,8 +137,11 @@ async function translateSegments(
 
     let parsed: Array<{ index: number; text: string }>;
     try {
-      // Prepend the "[" we used as prefill since it's not included in the response
-      parsed = JSON.parse("[" + rawContent.text);
+      const cleaned = rawContent.text
+        .replace(/^```[a-z]*\n?/i, "")
+        .replace(/\n?```$/i, "")
+        .trim();
+      parsed = JSON.parse(cleaned);
     } catch {
       throw new Error("Claude returned invalid JSON for translation batch");
     }
