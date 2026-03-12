@@ -77,7 +77,7 @@ export default function UploadCard() {
       const urlRes = await fetch("/api/upload-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: file.name }),
+        body: JSON.stringify({ filename: file.name, mimeType: file.type }),
       });
       if (!urlRes.ok) {
         const body = await urlRes.json().catch(() => ({}));
@@ -152,7 +152,7 @@ export default function UploadCard() {
         <input
           ref={inputRef}
           type="file"
-          accept="video/*,audio/*"
+          accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/ogg,audio/webm,.mp4,.mov,.avi,.webm,.mp3,.m4a,.wav,.ogg"
           className="hidden"
           onChange={handleFileChange}
         />
