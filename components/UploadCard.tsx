@@ -28,16 +28,28 @@ export default function UploadCard() {
   const isSameLang = sourceLang === targetLang;
   const isProcessing = ["uploading", "transcribing", "translating"].includes(status);
 
+  const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — Whisper API limit
+
+  const validateAndSetFile = (f: File) => {
+    resetResult();
+    if (f.size > MAX_FILE_SIZE) {
+      setError(`File is ${formatBytes(f.size)} — Whisper's limit is 25 MB. Please compress or trim the file first.`);
+      setStatus("error");
+      return;
+    }
+    setFile(f);
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
     const dropped = e.dataTransfer.files[0];
-    if (dropped) { setFile(dropped); resetResult(); }
+    if (dropped) validateAndSetFile(dropped);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
-    if (selected) { setFile(selected); resetResult(); }
+    if (selected) validateAndSetFile(selected);
   };
 
   const resetResult = () => {
