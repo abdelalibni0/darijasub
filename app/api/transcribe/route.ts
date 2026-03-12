@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { toFile } from "openai/uploads";
 import Anthropic from "@anthropic-ai/sdk";
 import { createAdminClient, UPLOAD_BUCKET } from "@/lib/supabase/admin";
+import { ensureWhisperCompatible } from "@/lib/ffmpeg";
 import {
   getLanguage,
   getWhisperPrompt,
@@ -49,8 +49,11 @@ export async function POST(request: NextRequest) {
       throw new Error(downloadError?.message ?? "Failed to download file from storage");
     }
 
-    // ── Step 2: Transcribe with Whisper ───────────────────────────────────────
-    const audioFile = await toFile(blob, originalName, { type: blob.type });
+    // ── Step 2: Convert to Whisper-compatible format if needed (e.g. .mov → mp3)
+    const { file: audioFile, cleanup: cleanupTempFiles } =
+      await ensureWhisperCompatible(blob, originalName);
+
+    // ── Step 3: Transcribe with Whisper ───────────────────────────────────────
     const whisperPrompt = getWhisperPrompt(sourceLangValue);
 
     const transcription = await openai.audio.transcriptions.create({
@@ -61,6 +64,8 @@ export async function POST(request: NextRequest) {
       timestamp_granularities: ["segment"],
       ...(whisperPrompt ? { prompt: whisperPrompt } : {}),
     });
+
+    await cleanupTempFiles();
 
     if (!transcription.segments || transcription.segments.length === 0) {
       return NextResponse.json(
