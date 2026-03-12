@@ -152,7 +152,7 @@ export default function UploadCard() {
         <input
           ref={inputRef}
           type="file"
-          accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/ogg,audio/webm,.mp4,.mov,.avi,.webm,.mp3,.m4a,.wav,.ogg"
+          accept="video/mp4,video/quicktime,video/mov,video/x-msvideo,video/webm,audio/mpeg,audio/mp4,audio/x-m4a,audio/m4a,audio/wav,audio/x-wav,audio/ogg,audio/webm,.mp4,.mov,.avi,.webm,.mp3,.m4a,.wav,.ogg"
           className="hidden"
           onChange={handleFileChange}
         />

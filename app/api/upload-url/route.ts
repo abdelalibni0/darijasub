@@ -3,12 +3,14 @@ import { createAdminClient, ensureBucket, UPLOAD_BUCKET } from "@/lib/supabase/a
 
 const ALLOWED_MIME_TYPES = new Set([
   "video/mp4",
-  "video/quicktime", // .mov
+  "video/quicktime", // .mov (macOS/iOS)
   "video/mov",       // .mov (alternate)
   "video/x-msvideo",
   "video/webm",
   "audio/mpeg",
-  "audio/mp4",
+  "audio/mp4",       // .m4a (standard)
+  "audio/x-m4a",    // .m4a (Apple/iTunes)
+  "audio/m4a",      // .m4a (alternate)
   "audio/wav",
   "audio/x-wav",
   "audio/ogg",
