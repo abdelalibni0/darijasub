@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { toFile } from "openai/uploads";
 import Anthropic from "@anthropic-ai/sdk";
+import { createAdminClient, UPLOAD_BUCKET } from "@/lib/supabase/admin";
 import {
   getLanguage,
   getWhisperPrompt,
@@ -12,44 +14,47 @@ import {
   type SrtSegment,
 } from "@/lib/srt";
 
-export const maxDuration = 300; // 5 min timeout for large files
-
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: "50mb",
-    },
-  },
-};
+export const maxDuration = 300;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(request: NextRequest) {
-  try {
-    const formData = await request.formData();
-    const file = formData.get("file") as File | null;
-    const sourceLangValue = formData.get("sourceLang") as string | null;
-    const targetLangValue = formData.get("targetLang") as string | null;
+  let storagePath: string | null = null;
 
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
-    }
-    if (!sourceLangValue || !targetLangValue) {
+  try {
+    const body = await request.json();
+    storagePath = body.storagePath as string | null;
+    const sourceLangValue = body.sourceLang as string | null;
+    const targetLangValue = body.targetLang as string | null;
+    const originalName = (body.originalName as string | null) ?? "audio.mp4";
+
+    if (!storagePath || !sourceLangValue || !targetLangValue) {
       return NextResponse.json(
-        { error: "sourceLang and targetLang are required" },
+        { error: "storagePath, sourceLang, and targetLang are required" },
         { status: 400 }
       );
     }
 
     const sourceLang = getLanguage(sourceLangValue);
     const targetLang = getLanguage(targetLangValue);
+    const admin = createAdminClient();
 
-    // ── Step 1: Transcribe with Whisper ──────────────────────────────────────
+    // ── Step 1: Download file from Supabase Storage ───────────────────────────
+    const { data: blob, error: downloadError } = await admin.storage
+      .from(UPLOAD_BUCKET)
+      .download(storagePath);
+
+    if (downloadError || !blob) {
+      throw new Error(downloadError?.message ?? "Failed to download file from storage");
+    }
+
+    // ── Step 2: Transcribe with Whisper ───────────────────────────────────────
+    const audioFile = await toFile(blob, originalName, { type: blob.type });
     const whisperPrompt = getWhisperPrompt(sourceLangValue);
 
     const transcription = await openai.audio.transcriptions.create({
-      file,
+      file: audioFile,
       model: "whisper-1",
       language: sourceLang.whisperCode,
       response_format: "verbose_json",
@@ -57,10 +62,7 @@ export async function POST(request: NextRequest) {
       ...(whisperPrompt ? { prompt: whisperPrompt } : {}),
     });
 
-    if (
-      !transcription.segments ||
-      transcription.segments.length === 0
-    ) {
+    if (!transcription.segments || transcription.segments.length === 0) {
       return NextResponse.json(
         { error: "No speech detected in the file" },
         { status: 422 }
@@ -69,16 +71,15 @@ export async function POST(request: NextRequest) {
 
     let segments = whisperSegmentsToSrt(transcription.segments);
 
-    // ── Step 2: Translate with Claude (skip if same language) ────────────────
-    const isSameLanguage = sourceLangValue === targetLangValue;
-
-    if (!isSameLanguage) {
+    // ── Step 3: Translate with Claude (skip if same language) ─────────────────
+    if (sourceLangValue !== targetLangValue) {
       segments = await translateSegments(segments, sourceLang, targetLang);
     }
 
-    // ── Step 3: Build and return SRT ─────────────────────────────────────────
+    // ── Step 4: Build and return SRT ──────────────────────────────────────────
     const srtContent = segmentsToSrtString(segments);
-    const filename = `${file.name.replace(/\.[^/.]+$/, "")}_${targetLang.value}.srt`;
+    const baseName = originalName.replace(/\.[^/.]+$/, "");
+    const filename = `${baseName}_${targetLang.value}.srt`;
 
     return new NextResponse(srtContent, {
       status: 200,
@@ -93,10 +94,16 @@ export async function POST(request: NextRequest) {
     const message =
       error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    // ── Always clean up the file from storage ─────────────────────────────────
+    if (storagePath) {
+      const admin = createAdminClient();
+      await admin.storage.from(UPLOAD_BUCKET).remove([storagePath]);
+    }
   }
 }
 
-// ── Translation helper ────────────────────────────────────────────────────────
+// ── Translation helper ─────────────────────────────────────────────────────────
 
 async function translateSegments(
   segments: SrtSegment[],
@@ -104,8 +111,6 @@ async function translateSegments(
   targetLang: ReturnType<typeof getLanguage>
 ): Promise<SrtSegment[]> {
   const systemPrompt = getTranslationPrompt(sourceLang, targetLang);
-
-  // Send segments in batches of 100 to stay within token limits
   const BATCH_SIZE = 100;
   const translated: SrtSegment[] = [];
 
@@ -117,12 +122,7 @@ async function translateSegments(
       model: "claude-sonnet-4-6",
       max_tokens: 4096,
       system: systemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: JSON.stringify(input),
-        },
-      ],
+      messages: [{ role: "user", content: JSON.stringify(input) }],
     });
 
     const rawContent = message.content[0];
@@ -132,7 +132,6 @@ async function translateSegments(
 
     let parsed: Array<{ index: number; text: string }>;
     try {
-      // Strip any accidental markdown code fences
       const cleaned = rawContent.text
         .replace(/^```[a-z]*\n?/i, "")
         .replace(/\n?```$/i, "")
@@ -142,13 +141,9 @@ async function translateSegments(
       throw new Error("Claude returned invalid JSON for translation batch");
     }
 
-    // Merge translated text back with original timing
     for (const seg of batch) {
       const translatedSeg = parsed.find((p) => p.index === seg.index);
-      translated.push({
-        ...seg,
-        text: translatedSeg?.text ?? seg.text,
-      });
+      translated.push({ ...seg, text: translatedSeg?.text ?? seg.text });
     }
   }
 

@@ -1,18 +1,21 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { LANGUAGES } from "@/lib/languages";
 
 type Status = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
 
 const STATUS_MESSAGES: Record<Status, string> = {
   idle: "",
-  uploading: "Uploading file...",
+  uploading: "Uploading to storage...",
   transcribing: "Transcribing with Whisper AI...",
   translating: "Translating with Claude...",
   done: "Done! Your SRT file is ready.",
   error: "",
 };
+
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — Whisper API limit
 
 export default function UploadCard() {
   const [dragging, setDragging] = useState(false);
@@ -28,12 +31,24 @@ export default function UploadCard() {
   const isSameLang = sourceLang === targetLang;
   const isProcessing = ["uploading", "transcribing", "translating"].includes(status);
 
-  const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — Whisper API limit
+  const formatBytes = (bytes: number) =>
+    bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(1)} KB`
+      : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+  const resetResult = () => {
+    setStatus("idle");
+    setError(null);
+    if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+    setDownloadUrl(null);
+  };
 
   const validateAndSetFile = (f: File) => {
     resetResult();
     if (f.size > MAX_FILE_SIZE) {
-      setError(`File is ${formatBytes(f.size)} — Whisper's limit is 25 MB. Please compress or trim the file first.`);
+      setError(
+        `File is ${formatBytes(f.size)} — Whisper's limit is 25 MB. Please compress or trim the file first.`
+      );
       setStatus("error");
       return;
     }
@@ -52,50 +67,62 @@ export default function UploadCard() {
     if (selected) validateAndSetFile(selected);
   };
 
-  const resetResult = () => {
-    setStatus("idle");
-    setError(null);
-    if (downloadUrl) URL.revokeObjectURL(downloadUrl);
-    setDownloadUrl(null);
-  };
-
-  const formatBytes = (bytes: number) =>
-    bytes < 1024 * 1024
-      ? `${(bytes / 1024).toFixed(1)} KB`
-      : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-
   const handleSubmit = async () => {
     if (!file) return;
     resetResult();
 
     try {
+      // ── Step 1: Get a signed upload URL from our API ──────────────────────
       setStatus("uploading");
-      const form = new FormData();
-      form.append("file", file);
-      form.append("sourceLang", sourceLang);
-      form.append("targetLang", targetLang);
+      const urlRes = await fetch("/api/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name }),
+      });
+      if (!urlRes.ok) {
+        const body = await urlRes.json().catch(() => ({}));
+        throw new Error(body.error ?? "Failed to get upload URL");
+      }
+      const { signedUrl, token, storagePath } = await urlRes.json();
 
+      // ── Step 2: Upload file directly to Supabase (bypasses Vercel limit) ──
+      const supabase = createClient();
+      const { error: uploadError } = await supabase.storage
+        .from("temp-uploads")
+        .uploadToSignedUrl(storagePath, token, file, {
+          contentType: file.type || "application/octet-stream",
+        });
+      if (uploadError) throw new Error(uploadError.message);
+
+      // ── Step 3: Tell the API to process it (tiny JSON payload) ────────────
       setStatus("transcribing");
-      const res = await fetch("/api/transcribe", { method: "POST", body: form });
+      if (!isSameLang) setStatus("translating"); // optimistic — server handles both
+      setStatus("transcribing");
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Server error ${res.status}`);
+      const transcribeRes = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storagePath,
+          sourceLang,
+          targetLang,
+          originalName: file.name,
+        }),
+      });
+
+      if (!transcribeRes.ok) {
+        const body = await transcribeRes.json().catch(() => ({}));
+        throw new Error(body.error ?? `Server error ${transcribeRes.status}`);
       }
 
-      // If translating, optimistically show translating state
-      // (the API handles it server-side; we show the state before response arrives)
-      if (!isSameLang) setStatus("translating");
+      const blob = await transcribeRes.blob();
+      const downloadObjectUrl = URL.createObjectURL(blob);
 
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-
-      // Derive filename from Content-Disposition header if present
-      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const disposition = transcribeRes.headers.get("Content-Disposition") ?? "";
       const match = disposition.match(/filename="([^"]+)"/);
       const filename = match?.[1] ?? `subtitles_${targetLang}.srt`;
 
-      setDownloadUrl(url);
+      setDownloadUrl(downloadObjectUrl);
       setDownloadFilename(filename);
       setStatus("done");
     } catch (err) {
