@@ -5,8 +5,8 @@ import { createAdminClient, UPLOAD_BUCKET } from "@/lib/supabase/admin";
 import { ensureWhisperCompatible } from "@/lib/ffmpeg";
 import {
   getLanguage,
-  getWhisperPrompt,
   getTranslationPrompt,
+  whisperNameToCode,
 } from "@/lib/languages";
 import {
   whisperSegmentsToSrt,
@@ -25,18 +25,16 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     storagePath = body.storagePath as string | null;
-    const sourceLangValue = body.sourceLang as string | null;
     const targetLangValue = body.targetLang as string | null;
     const originalName = (body.originalName as string | null) ?? "audio.mp4";
 
-    if (!storagePath || !sourceLangValue || !targetLangValue) {
+    if (!storagePath || !targetLangValue) {
       return NextResponse.json(
-        { error: "storagePath, sourceLang, and targetLang are required" },
+        { error: "storagePath and targetLang are required" },
         { status: 400 }
       );
     }
 
-    const sourceLang = getLanguage(sourceLangValue);
     const targetLang = getLanguage(targetLangValue);
     const admin = createAdminClient();
 
@@ -53,16 +51,12 @@ export async function POST(request: NextRequest) {
     const { file: audioFile, cleanup: cleanupTempFiles } =
       await ensureWhisperCompatible(blob, originalName);
 
-    // ── Step 3: Transcribe with Whisper ───────────────────────────────────────
-    const whisperPrompt = getWhisperPrompt(sourceLangValue);
-
+    // ── Step 3: Transcribe with Whisper (auto-detect language) ────────────────
     const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
       model: "whisper-1",
-      language: sourceLang.whisperCode,
       response_format: "verbose_json",
       timestamp_granularities: ["segment"],
-      ...(whisperPrompt ? { prompt: whisperPrompt } : {}),
     });
 
     await cleanupTempFiles();
@@ -74,14 +68,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Whisper returns a full language name e.g. "arabic", "french", "english"
+    const detectedLanguage = transcription.language ?? "unknown";
+
     let segments = whisperSegmentsToSrt(transcription.segments);
 
-    // ── Step 3: Translate with Claude (skip if same language) ─────────────────
-    if (sourceLangValue !== targetLangValue) {
-      segments = await translateSegments(segments, sourceLang, targetLang);
+    // ── Step 4: Translate with Claude — skip if same language ─────────────────
+    const detectedCode = whisperNameToCode(detectedLanguage);
+    const isSameLanguage = detectedCode === targetLang.whisperCode;
+
+    if (!isSameLanguage) {
+      segments = await translateSegments(segments, detectedLanguage, targetLang);
     }
 
-    // ── Step 4: Build and return SRT ──────────────────────────────────────────
+    // ── Step 5: Build and return SRT ──────────────────────────────────────────
     const srtContent = segmentsToSrtString(segments);
     const baseName = originalName.replace(/\.[^/.]+$/, "");
     const filename = `${baseName}_${targetLang.value}.srt`;
@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Content-Disposition": `attachment; filename="${filename}"`,
+        "X-Detected-Language": detectedLanguage,
         "X-Segment-Count": String(segments.length),
       },
     });
@@ -100,7 +101,6 @@ export async function POST(request: NextRequest) {
       error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
-    // ── Always clean up the file from storage ─────────────────────────────────
     if (storagePath) {
       const admin = createAdminClient();
       await admin.storage.from(UPLOAD_BUCKET).remove([storagePath]);
@@ -112,10 +112,10 @@ export async function POST(request: NextRequest) {
 
 async function translateSegments(
   segments: SrtSegment[],
-  sourceLang: ReturnType<typeof getLanguage>,
+  detectedLanguage: string,
   targetLang: ReturnType<typeof getLanguage>
 ): Promise<SrtSegment[]> {
-  const systemPrompt = getTranslationPrompt(sourceLang, targetLang);
+  const systemPrompt = getTranslationPrompt(detectedLanguage, targetLang);
   const BATCH_SIZE = 100;
   const translated: SrtSegment[] = [];
 

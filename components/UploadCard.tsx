@@ -2,33 +2,32 @@
 
 import { useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { LANGUAGES } from "@/lib/languages";
+import { LANGUAGES, formatDetectedLanguage } from "@/lib/languages";
 
 type Status = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
 
 const STATUS_MESSAGES: Record<Status, string> = {
   idle: "",
   uploading: "Uploading to storage...",
-  transcribing: "Transcribing with Whisper AI...",
+  transcribing: "Transcribing — detecting language...",
   translating: "Translating with Claude...",
   done: "Done! Your SRT file is ready.",
   error: "",
 };
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — Whisper API limit
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
 export default function UploadCard() {
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [sourceLang, setSourceLang] = useState("darija-ma");
   const [targetLang, setTargetLang] = useState("fr");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadFilename, setDownloadFilename] = useState("subtitles.srt");
+  const [detectedLang, setDetectedLang] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const isSameLang = sourceLang === targetLang;
   const isProcessing = ["uploading", "transcribing", "translating"].includes(status);
 
   const formatBytes = (bytes: number) =>
@@ -39,6 +38,7 @@ export default function UploadCard() {
   const resetResult = () => {
     setStatus("idle");
     setError(null);
+    setDetectedLang(null);
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
     setDownloadUrl(null);
   };
@@ -72,7 +72,7 @@ export default function UploadCard() {
     resetResult();
 
     try {
-      // ── Step 1: Get a signed upload URL from our API ──────────────────────
+      // ── Step 1: Get a signed upload URL ──────────────────────────────────
       setStatus("uploading");
       const urlRes = await fetch("/api/upload-url", {
         method: "POST",
@@ -83,9 +83,9 @@ export default function UploadCard() {
         const body = await urlRes.json().catch(() => ({}));
         throw new Error(body.error ?? "Failed to get upload URL");
       }
-      const { signedUrl, token, storagePath } = await urlRes.json();
+      const { token, storagePath } = await urlRes.json();
 
-      // ── Step 2: Upload file directly to Supabase (bypasses Vercel limit) ──
+      // ── Step 2: Upload directly to Supabase (bypasses Vercel limit) ───────
       const supabase = createClient();
       const { error: uploadError } = await supabase.storage
         .from("temp-uploads")
@@ -94,9 +94,7 @@ export default function UploadCard() {
         });
       if (uploadError) throw new Error(uploadError.message);
 
-      // ── Step 3: Tell the API to process it (tiny JSON payload) ────────────
-      setStatus("transcribing");
-      if (!isSameLang) setStatus("translating"); // optimistic — server handles both
+      // ── Step 3: Process — auto-detect language + transcribe + translate ───
       setStatus("transcribing");
 
       const transcribeRes = await fetch("/api/transcribe", {
@@ -104,7 +102,6 @@ export default function UploadCard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           storagePath,
-          sourceLang,
           targetLang,
           originalName: file.name,
         }),
@@ -114,6 +111,10 @@ export default function UploadCard() {
         const body = await transcribeRes.json().catch(() => ({}));
         throw new Error(body.error ?? `Server error ${transcribeRes.status}`);
       }
+
+      // Read detected language from response header
+      const detected = transcribeRes.headers.get("X-Detected-Language");
+      if (detected) setDetectedLang(formatDetectedLanguage(detected));
 
       const blob = await transcribeRes.blob();
       const downloadObjectUrl = URL.createObjectURL(blob);
@@ -172,7 +173,15 @@ export default function UploadCard() {
           <div>
             <div className="text-4xl mb-3">✅</div>
             <p className="font-semibold text-white">Subtitles ready!</p>
-            <p className="text-sm text-white/40 mt-1">{file?.name}</p>
+            {detectedLang && (
+              <span className="inline-flex items-center gap-1.5 mt-2 text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2.5 py-1 rounded-full">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                </svg>
+                Detected: {detectedLang}
+              </span>
+            )}
+            <p className="text-sm text-white/40 mt-2">{file?.name}</p>
             <button
               onClick={(e) => { e.stopPropagation(); setFile(null); resetResult(); }}
               className="mt-3 text-xs text-white/30 hover:text-white/60 transition-colors"
@@ -196,58 +205,30 @@ export default function UploadCard() {
           <div>
             <div className="text-4xl mb-3">⬆️</div>
             <p className="font-semibold text-white">Drop your video or audio here</p>
-            <p className="text-sm text-white/40 mt-1">or click to browse — MP4, MOV, MP3, WAV, M4A supported</p>
+            <p className="text-sm text-white/40 mt-1">Language detected automatically — MP4, MOV, MP3, WAV, M4A supported</p>
             <p className="text-xs text-white/25 mt-3">Max 25 MB (Whisper limit)</p>
           </div>
         )}
       </div>
 
-      {/* Language selectors */}
-      <div className="grid md:grid-cols-2 gap-4 mt-5">
-        <div>
-          <label className="block text-sm font-medium text-white/60 mb-2">
-            Source language <span className="text-white/30 font-normal">(spoken in video)</span>
-          </label>
-          <select
-            value={sourceLang}
-            onChange={(e) => { setSourceLang(e.target.value); resetResult(); }}
-            disabled={isProcessing}
-            className="input-field disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {LANGUAGES.map((lang) => (
-              <option key={lang.value} value={lang.value} className="bg-gray-900">
-                {lang.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-white/60 mb-2">
-            Target language <span className="text-white/30 font-normal">(subtitle output)</span>
-          </label>
-          <select
-            value={targetLang}
-            onChange={(e) => { setTargetLang(e.target.value); resetResult(); }}
-            disabled={isProcessing}
-            className="input-field disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {LANGUAGES.map((lang) => (
-              <option key={lang.value} value={lang.value} className="bg-gray-900">
-                {lang.label}
-              </option>
-            ))}
-          </select>
-        </div>
+      {/* Target language selector (source removed — auto-detected) */}
+      <div className="mt-5">
+        <label className="block text-sm font-medium text-white/60 mb-2">
+          Subtitle language <span className="text-white/30 font-normal">(output)</span>
+        </label>
+        <select
+          value={targetLang}
+          onChange={(e) => { setTargetLang(e.target.value); resetResult(); }}
+          disabled={isProcessing}
+          className="input-field disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {LANGUAGES.map((lang) => (
+            <option key={lang.value} value={lang.value} className="bg-gray-900">
+              {lang.label}
+            </option>
+          ))}
+        </select>
       </div>
-
-      {/* Same-language notice */}
-      {isSameLang && (
-        <p className="mt-3 text-xs text-purple-300/70 flex items-center gap-1.5">
-          <span>ℹ️</span>
-          Same source and target — subtitles will be transcribed without translation.
-        </p>
-      )}
 
       {/* Error */}
       {status === "error" && error && (
