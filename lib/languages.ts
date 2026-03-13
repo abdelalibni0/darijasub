@@ -9,10 +9,14 @@ export interface Language {
 
 export const LANGUAGES: Language[] = [
   // ── Darija & Arabic ──────────────────────────────────────────────────────
-  { value: "darija-ma", label: "Moroccan Darija",           whisperCode: "ar", promptName: "Moroccan Darija" },
-  { value: "darija-dz", label: "Algerian Darija",           whisperCode: "ar", promptName: "Algerian Darija" },
-  { value: "msa",       label: "Modern Standard Arabic",    whisperCode: "ar", promptName: "Modern Standard Arabic (Fusha)" },
-  { value: "he",        label: "Hebrew",                    whisperCode: "he", promptName: "Hebrew" },
+  { value: "darija-ma",       label: "Moroccan Darija",         whisperCode: "ar", promptName: "Moroccan Darija" },
+  { value: "darija-dz",       label: "Algerian Darija",         whisperCode: "ar", promptName: "Algerian Darija" },
+  { value: "tunisian_darija", label: "Tunisian Darija",         whisperCode: "ar", promptName: "Tunisian Darija" },
+  { value: "msa",             label: "Modern Standard Arabic",  whisperCode: "ar", promptName: "Modern Standard Arabic (Fusha)" },
+  { value: "arabic_egyptian", label: "Arabic (Egyptian)",       whisperCode: "ar", promptName: "Egyptian Arabic" },
+  { value: "arabic_levantine",label: "Arabic (Levantine)",      whisperCode: "ar", promptName: "Levantine Arabic" },
+  { value: "arabic_gulf",     label: "Arabic (Gulf)",           whisperCode: "ar", promptName: "Gulf Arabic" },
+  { value: "he",              label: "Hebrew",                  whisperCode: "he", promptName: "Hebrew" },
   { value: "fa",        label: "Persian (Farsi)",           whisperCode: "fa", promptName: "Persian (Farsi)" },
   { value: "ku",        label: "Kurdish",                   whisperCode: "ku", promptName: "Kurdish" },
   // ── European ─────────────────────────────────────────────────────────────
@@ -138,6 +142,30 @@ function getTargetInstructions(targetLangValue: string): string {
         "Translate into Algerian Darija. Write in Arabic script. " +
         "Use natural Algerian Darija as spoken in Algeria — include French loanwords and Tamazight expressions where appropriate. " +
         "Do NOT write in Modern Standard Arabic."
+      );
+    case "tunisian_darija":
+      return (
+        "Translate into Tunisian Darija. Write in Arabic script. " +
+        "Use natural Tunisian dialect as spoken in Tunisia — it mixes Arabic with French loanwords and some Berber influences. " +
+        "Do NOT write in Modern Standard Arabic."
+      );
+    case "arabic_egyptian":
+      return (
+        "Translate into Egyptian colloquial Arabic as spoken in Cairo (Masri). Write in Arabic script. " +
+        "Use natural Egyptian dialect vocabulary and expressions — not Modern Standard Arabic. " +
+        "For example: use 'إيه' not 'ما', 'عايز' not 'يريد', 'دلوقتي' not 'الآن'."
+      );
+    case "arabic_levantine":
+      return (
+        "Translate into Levantine Arabic as spoken in Lebanon and Syria (Shami). Write in Arabic script. " +
+        "Use natural Levantine dialect vocabulary and expressions — not Modern Standard Arabic. " +
+        "For example: use 'شو' not 'ماذا', 'هيك' not 'هكذا', 'كتير' not 'كثير'."
+      );
+    case "arabic_gulf":
+      return (
+        "Translate into Gulf Arabic as spoken in Saudi Arabia and the UAE (Khaleeji). Write in Arabic script. " +
+        "Use natural Gulf dialect vocabulary and expressions — not Modern Standard Arabic. " +
+        "For example: use 'وش' not 'ماذا', 'ذا' not 'هذا', 'زين' not 'جيد'."
       );
     case "msa":
       return "Translate into Modern Standard Arabic (Fusha). Write in Arabic script. Use formal, grammatically correct MSA suitable for subtitles.";
