@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { LANGUAGES, formatDetectedLanguage, type Language } from "@/lib/languages";
 import ProgressSteps from "./ProgressSteps";
@@ -68,6 +69,8 @@ function getSteps(mode: Mode) {
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function UploadCard() {
+  const router = useRouter();
+
   const [dragging, setDragging]         = useState(false);
   const [file, setFile]                 = useState<File | null>(null);
   const [mode, setMode]                 = useState<Mode>("translate");
@@ -257,12 +260,25 @@ export default function UploadCard() {
       const detected = transcribeRes.headers.get("X-Detected-Language");
       if (detected) setDetectedLang(formatDetectedLanguage(detected));
 
-      const blob = await transcribeRes.blob();
-      const downloadObjectUrl = URL.createObjectURL(blob);
+      const srtText = await transcribeRes.text();
+      const downloadBlob = new Blob([srtText], { type: "text/plain;charset=utf-8" });
+      const downloadObjectUrl = URL.createObjectURL(downloadBlob);
 
       const disposition = transcribeRes.headers.get("Content-Disposition") ?? "";
       const match = disposition.match(/filename="([^"]+)"/);
       const filename = match?.[1] ?? `subtitles_${mode === "translate" ? targetLang : "transcribed"}.srt`;
+
+      // Store SRT + audio URL in localStorage for the editor
+      try {
+        const audioObjectUrl = file ? URL.createObjectURL(file) : null;
+        localStorage.setItem("darijasub_editor", JSON.stringify({
+          srtText,
+          audioUrl: audioObjectUrl,
+          filename: file?.name ?? filename,
+        }));
+      } catch {
+        // localStorage unavailable — editor won't have audio but that's fine
+      }
 
       setDownloadUrl(downloadObjectUrl);
       setDownloadFilename(filename);
@@ -499,19 +515,31 @@ export default function UploadCard() {
         </div>
       )}
 
-      {/* Download */}
+      {/* Download + Open Editor */}
       {status === "done" && downloadUrl && (
-        <div className="mt-3 flex gap-3">
-          <a href={downloadUrl} download={downloadFilename}
-            className="flex-1 btn-primary flex items-center justify-center gap-2">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Download SRT
-          </a>
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex gap-2">
+            <a href={downloadUrl} download={downloadFilename}
+              className="flex-1 btn-primary flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download SRT
+            </a>
+            <button type="button"
+              onClick={() => router.push("/dashboard/editor")}
+              className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold text-sm transition-all border border-purple-500/40 text-purple-300 hover:bg-purple-500/10 hover:border-purple-400/60"
+              style={{ background: "rgba(147,51,234,0.12)" }}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              </svg>
+              Open Editor
+            </button>
+          </div>
           <button type="button" onClick={() => { setFile(null); resetResult(); }}
-            className="px-4 py-2 rounded-xl border border-white/10 text-sm text-white/50 hover:text-white/80 hover:border-white/20 transition-all">
-            New file
+            className="text-xs text-white/30 hover:text-white/60 transition-colors py-1">
+            Start over
           </button>
         </div>
       )}
