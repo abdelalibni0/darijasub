@@ -3,21 +3,28 @@
 import { useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { LANGUAGES, formatDetectedLanguage } from "@/lib/languages";
+import ProgressSteps from "./ProgressSteps";
 
 type Status = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
-
-const STATUS_MESSAGES: Record<Status, string> = {
-  idle: "",
-  uploading: "Uploading to storage...",
-  transcribing: "Transcribing — detecting language...",
-  translating: "Translating with Claude...",
-  done: "Done! Your SRT file is ready.",
-  error: "",
-};
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
 type Mode = "transcribe" | "translate";
+
+function getSteps(mode: Mode) {
+  return mode === "translate"
+    ? [
+        { label: "Uploading file", icon: "upload" as const },
+        { label: "Transcribing audio", icon: "mic" as const },
+        { label: "Translating subtitles", icon: "globe" as const },
+        { label: "Ready to download", icon: "check" as const },
+      ]
+    : [
+        { label: "Uploading file", icon: "upload" as const },
+        { label: "Transcribing audio", icon: "mic" as const },
+        { label: "Ready to download", icon: "check" as const },
+      ];
+}
 
 export default function UploadCard() {
   const [dragging, setDragging] = useState(false);
@@ -29,19 +36,55 @@ export default function UploadCard() {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadFilename, setDownloadFilename] = useState("subtitles.srt");
   const [detectedLang, setDetectedLang] = useState<string | null>(null);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [progress, setProgress] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isProcessing = ["uploading", "transcribing", "translating"].includes(status);
+  const showProgress = isProcessing || status === "done";
+
+  const steps = getSteps(mode);
+
+  const statuses = steps.map((_, i) => {
+    if (i < stepIndex) return "done" as const;
+    if (i === stepIndex) return "active" as const;
+    return "pending" as const;
+  });
 
   const formatBytes = (bytes: number) =>
     bytes < 1024 * 1024
       ? `${(bytes / 1024).toFixed(1)} KB`
       : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
+  const stopProgressInterval = () => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  };
+
+  const startSlowFill = (from: number, to: number) => {
+    stopProgressInterval();
+    setProgress(from);
+    progressIntervalRef.current = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= to) {
+          stopProgressInterval();
+          return to;
+        }
+        return prev + 0.3;
+      });
+    }, 300);
+  };
+
   const resetResult = () => {
+    stopProgressInterval();
     setStatus("idle");
     setError(null);
     setDetectedLang(null);
+    setStepIndex(0);
+    setProgress(0);
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
     setDownloadUrl(null);
   };
@@ -75,8 +118,11 @@ export default function UploadCard() {
     resetResult();
 
     try {
-      // ── Step 1: Get a signed upload URL ──────────────────────────────────
+      // ── Step 0 active: Uploading ──────────────────────────────────────────
+      setStepIndex(0);
+      setProgress(5);
       setStatus("uploading");
+
       const urlRes = await fetch("/api/upload-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -87,8 +133,9 @@ export default function UploadCard() {
         throw new Error(body.error ?? "Failed to get upload URL");
       }
       const { token, storagePath } = await urlRes.json();
+      setProgress(12);
 
-      // ── Step 2: Upload directly to Supabase (bypasses Vercel limit) ───────
+      // ── Upload directly to Supabase ───────────────────────────────────────
       const supabase = createClient();
       const { error: uploadError } = await supabase.storage
         .from("temp-uploads")
@@ -97,8 +144,13 @@ export default function UploadCard() {
         });
       if (uploadError) throw new Error(uploadError.message);
 
-      // ── Step 3: Transcribe (+ optionally translate) ───────────────────────
+      // ── Step 1 active: Transcribing ───────────────────────────────────────
+      setStepIndex(1);
+      setProgress(25);
       setStatus("transcribing");
+
+      // Slow-fill from 25% → 70% while waiting for API
+      startSlowFill(25, 70);
 
       const transcribeRes = await fetch("/api/transcribe", {
         method: "POST",
@@ -111,9 +163,23 @@ export default function UploadCard() {
         }),
       });
 
+      stopProgressInterval();
+
       if (!transcribeRes.ok) {
         const body = await transcribeRes.json().catch(() => ({}));
         throw new Error(body.error ?? `Server error ${transcribeRes.status}`);
+      }
+
+      if (mode === "translate") {
+        // ── Step 2 active: Translating ──────────────────────────────────────
+        setStepIndex(2);
+        setProgress(75);
+        setStatus("translating");
+        startSlowFill(75, 92);
+
+        // Small delay to let the "translating" state render before we finalize
+        await new Promise((r) => setTimeout(r, 400));
+        stopProgressInterval();
       }
 
       // Read detected language from response header
@@ -129,8 +195,14 @@ export default function UploadCard() {
 
       setDownloadUrl(downloadObjectUrl);
       setDownloadFilename(filename);
+
+      // ── Final step done ───────────────────────────────────────────────────
+      const lastStep = steps.length - 1;
+      setStepIndex(lastStep + 1); // all steps done
+      setProgress(100);
       setStatus("done");
     } catch (err) {
+      stopProgressInterval();
       setError(err instanceof Error ? err.message : "Something went wrong");
       setStatus("error");
     }
@@ -143,7 +215,7 @@ export default function UploadCard() {
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
-        onClick={() => !isProcessing && inputRef.current?.click()}
+        onClick={() => !isProcessing && !showProgress && inputRef.current?.click()}
         className={`border-2 border-dashed rounded-xl p-10 text-center transition-all duration-200 ${
           isProcessing
             ? "border-purple-500/30 bg-purple-500/5 cursor-default"
@@ -164,14 +236,7 @@ export default function UploadCard() {
 
         {isProcessing ? (
           <div>
-            <div className="flex items-center justify-center mb-3">
-              <svg className="animate-spin w-8 h-8 text-purple-400" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-            </div>
-            <p className="font-semibold text-white">{STATUS_MESSAGES[status]}</p>
-            <p className="text-sm text-white/40 mt-1">{file?.name}</p>
+            <p className="font-semibold text-white/60 text-sm">{file?.name}</p>
           </div>
         ) : status === "done" && downloadUrl ? (
           <div>
@@ -274,44 +339,50 @@ export default function UploadCard() {
         </div>
       )}
 
-      {/* Actions */}
-      <div className="mt-5 flex gap-3">
-        <button
-          onClick={handleSubmit}
-          disabled={!file || isProcessing}
-          className={`flex-1 btn-primary flex items-center justify-center gap-2 ${
-            !file || isProcessing ? "opacity-40 cursor-not-allowed hover:scale-100" : ""
-          }`}
-        >
-          {isProcessing ? (
-            <>
-              <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              {STATUS_MESSAGES[status]}
-            </>
-          ) : (
-            <>
-              <span>Generate subtitles</span>
-              <span>→</span>
-            </>
-          )}
-        </button>
+      {/* Progress steps — shown while processing or done */}
+      {showProgress && (
+        <div className="mt-5 p-4 bg-white/3 rounded-xl border border-white/8">
+          <ProgressSteps steps={steps} statuses={statuses} progress={progress} />
+        </div>
+      )}
 
-        {status === "done" && downloadUrl && (
+      {/* Actions */}
+      {!showProgress && (
+        <div className="mt-5 flex gap-3">
+          <button
+            onClick={handleSubmit}
+            disabled={!file || isProcessing}
+            className={`flex-1 btn-primary flex items-center justify-center gap-2 ${
+              !file || isProcessing ? "opacity-40 cursor-not-allowed hover:scale-100" : ""
+            }`}
+          >
+            <span>Generate subtitles</span>
+            <span>→</span>
+          </button>
+        </div>
+      )}
+
+      {/* Download button — shown after done */}
+      {status === "done" && downloadUrl && (
+        <div className="mt-3 flex gap-3">
           <a
             href={downloadUrl}
             download={downloadFilename}
-            className="btn-primary flex items-center justify-center gap-2 px-5"
+            className="flex-1 btn-primary flex items-center justify-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
             Download SRT
           </a>
-        )}
-      </div>
+          <button
+            onClick={() => { setFile(null); resetResult(); }}
+            className="px-4 py-2 rounded-xl border border-white/10 text-sm text-white/50 hover:text-white/80 hover:border-white/20 transition-all"
+          >
+            New file
+          </button>
+        </div>
+      )}
     </div>
   );
 }
