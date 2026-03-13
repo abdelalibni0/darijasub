@@ -2,8 +2,9 @@
 
 import { useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { LANGUAGES, formatDetectedLanguage } from "@/lib/languages";
+import { formatDetectedLanguage } from "@/lib/languages";
 import ProgressSteps from "./ProgressSteps";
+import LanguagePicker from "./LanguagePicker";
 
 type Status = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
 
@@ -317,18 +318,11 @@ export default function UploadCard() {
       {/* Target language dropdown — only shown in translate mode */}
       {mode === "translate" && (
         <div className="mt-3">
-          <select
+          <LanguagePicker
             value={targetLang}
-            onChange={(e) => { setTargetLang(e.target.value); resetResult(); }}
+            onChange={(v) => { setTargetLang(v); resetResult(); }}
             disabled={isProcessing}
-            className="input-field disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {LANGUAGES.map((lang) => (
-              <option key={lang.value} value={lang.value} className="bg-gray-900">
-                {lang.label}
-              </option>
-            ))}
-          </select>
+          />
         </div>
       )}
 
