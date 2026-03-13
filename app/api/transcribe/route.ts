@@ -25,17 +25,18 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     storagePath = body.storagePath as string | null;
+    const mode = (body.mode as string | null) ?? "translate";
     const targetLangValue = body.targetLang as string | null;
     const originalName = (body.originalName as string | null) ?? "audio.mp4";
 
-    if (!storagePath || !targetLangValue) {
-      return NextResponse.json(
-        { error: "storagePath and targetLang are required" },
-        { status: 400 }
-      );
+    if (!storagePath) {
+      return NextResponse.json({ error: "storagePath is required" }, { status: 400 });
+    }
+    if (mode === "translate" && !targetLangValue) {
+      return NextResponse.json({ error: "targetLang is required in translate mode" }, { status: 400 });
     }
 
-    const targetLang = getLanguage(targetLangValue);
+    const targetLang = mode === "translate" ? getLanguage(targetLangValue!) : null;
     const admin = createAdminClient();
 
     // ── Step 1: Download file from Supabase Storage ───────────────────────────
@@ -73,18 +74,20 @@ export async function POST(request: NextRequest) {
 
     let segments = whisperSegmentsToSrt(transcription.segments);
 
-    // ── Step 4: Translate with Claude — skip if same language ─────────────────
-    const detectedCode = whisperNameToCode(detectedLanguage);
-    const isSameLanguage = detectedCode === targetLang.whisperCode;
-
-    if (!isSameLanguage) {
-      segments = await translateSegments(segments, detectedLanguage, targetLang);
+    // ── Step 4: Translate with Claude — only in translate mode ────────────────
+    if (mode === "translate" && targetLang) {
+      const detectedCode = whisperNameToCode(detectedLanguage);
+      const isSameLanguage = detectedCode === targetLang.whisperCode;
+      if (!isSameLanguage) {
+        segments = await translateSegments(segments, detectedLanguage, targetLang);
+      }
     }
 
     // ── Step 5: Build and return SRT ──────────────────────────────────────────
     const srtContent = segmentsToSrtString(segments);
     const baseName = originalName.replace(/\.[^/.]+$/, "");
-    const filename = `${baseName}_${targetLang.value}.srt`;
+    const suffix = mode === "translate" && targetLang ? targetLang.value : "transcribed";
+    const filename = `${baseName}_${suffix}.srt`;
 
     return new NextResponse(srtContent, {
       status: 200,

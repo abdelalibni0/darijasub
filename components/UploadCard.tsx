@@ -17,10 +17,13 @@ const STATUS_MESSAGES: Record<Status, string> = {
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
+type Mode = "transcribe" | "translate";
+
 export default function UploadCard() {
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [targetLang, setTargetLang] = useState("fr");
+  const [mode, setMode] = useState<Mode>("translate");
+  const [targetLang, setTargetLang] = useState("en");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -94,7 +97,7 @@ export default function UploadCard() {
         });
       if (uploadError) throw new Error(uploadError.message);
 
-      // ── Step 3: Process — auto-detect language + transcribe + translate ───
+      // ── Step 3: Transcribe (+ optionally translate) ───────────────────────
       setStatus("transcribing");
 
       const transcribeRes = await fetch("/api/transcribe", {
@@ -102,7 +105,8 @@ export default function UploadCard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           storagePath,
-          targetLang,
+          mode,
+          targetLang: mode === "translate" ? targetLang : undefined,
           originalName: file.name,
         }),
       });
@@ -121,7 +125,7 @@ export default function UploadCard() {
 
       const disposition = transcribeRes.headers.get("Content-Disposition") ?? "";
       const match = disposition.match(/filename="([^"]+)"/);
-      const filename = match?.[1] ?? `subtitles_${targetLang}.srt`;
+      const filename = match?.[1] ?? `subtitles_${mode === "translate" ? targetLang : "transcribed"}.srt`;
 
       setDownloadUrl(downloadObjectUrl);
       setDownloadFilename(filename);
@@ -211,24 +215,57 @@ export default function UploadCard() {
         )}
       </div>
 
-      {/* Target language selector (source removed — auto-detected) */}
+      {/* Mode toggle */}
       <div className="mt-5">
-        <label className="block text-sm font-medium text-white/60 mb-2">
-          Subtitle language <span className="text-white/30 font-normal">(output)</span>
-        </label>
-        <select
-          value={targetLang}
-          onChange={(e) => { setTargetLang(e.target.value); resetResult(); }}
-          disabled={isProcessing}
-          className="input-field disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {LANGUAGES.map((lang) => (
-            <option key={lang.value} value={lang.value} className="bg-gray-900">
-              {lang.label}
-            </option>
+        <div className="flex rounded-xl overflow-hidden border border-white/10 p-1 bg-white/5">
+          {(["transcribe", "translate"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => { setMode(m); resetResult(); }}
+              disabled={isProcessing}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed ${
+                mode === m
+                  ? "bg-purple-600 text-white shadow shadow-purple-900/40"
+                  : "text-white/50 hover:text-white/80"
+              }`}
+            >
+              {m === "transcribe" ? (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                  Transcribe only
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                  </svg>
+                  Translate to
+                </>
+              )}
+            </button>
           ))}
-        </select>
+        </div>
       </div>
+
+      {/* Target language dropdown — only shown in translate mode */}
+      {mode === "translate" && (
+        <div className="mt-3">
+          <select
+            value={targetLang}
+            onChange={(e) => { setTargetLang(e.target.value); resetResult(); }}
+            disabled={isProcessing}
+            className="input-field disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {LANGUAGES.map((lang) => (
+              <option key={lang.value} value={lang.value} className="bg-gray-900">
+                {lang.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Error */}
       {status === "error" && error && (
