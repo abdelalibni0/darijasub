@@ -1,57 +1,148 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { formatDetectedLanguage } from "@/lib/languages";
+import { LANGUAGES, formatDetectedLanguage, type Language } from "@/lib/languages";
 import ProgressSteps from "./ProgressSteps";
-import LanguagePicker from "./LanguagePicker";
+
+// ── Language picker data ───────────────────────────────────────────────────────
+
+const FLAGS: Record<string, string> = {
+  "darija-ma": "🇲🇦", "darija-dz": "🇩🇿", "tunisian_darija": "🇹🇳",
+  "arabic_egyptian": "🇪🇬", "arabic_levantine": "🇱🇧", "arabic_gulf": "🇸🇦", "msa": "🌍",
+  "en": "🇬🇧", "fr": "🇫🇷", "es": "🇪🇸", "de": "🇩🇪", "it": "🇮🇹",
+  "pt": "🇵🇹", "nl": "🇳🇱", "tr": "🇹🇷", "ru": "🇷🇺", "uk": "🇺🇦",
+  "pl": "🇵🇱", "ro": "🇷🇴", "hu": "🇭🇺", "cs": "🇨🇿", "sk": "🇸🇰",
+  "bg": "🇧🇬", "sr": "🇷🇸", "hr": "🇭🇷", "el": "🇬🇷", "fi": "🇫🇮",
+  "sv": "🇸🇪", "no": "🇳🇴", "da": "🇩🇰", "ja": "🇯🇵", "ko": "🇰🇷",
+  "zh": "🇨🇳", "zh-TW": "🇹🇼", "hi": "🇮🇳", "ur": "🇵🇰", "bn": "🇧🇩",
+  "id": "🇮🇩", "ms": "🇲🇾", "tl": "🇵🇭", "th": "🇹🇭", "vi": "🇻🇳",
+  "he": "🇮🇱", "fa": "🇮🇷", "ku": "🏳️", "sw": "🇰🇪", "ha": "🇳🇬", "am": "🇪🇹",
+};
+
+type LangGroup = "Arabic Dialects" | "Popular" | "Asian" | "Other";
+
+const ARABIC_DIALECTS = new Set(["darija-ma","darija-dz","tunisian_darija","arabic_egyptian","arabic_levantine","arabic_gulf","msa"]);
+const POPULAR         = new Set(["en","fr","es","de","it","pt","nl","tr"]);
+const ASIAN           = new Set(["ja","ko","zh","zh-TW","hi","id","vi","th"]);
+
+function langGroup(value: string): LangGroup {
+  if (ARABIC_DIALECTS.has(value)) return "Arabic Dialects";
+  if (POPULAR.has(value))         return "Popular";
+  if (ASIAN.has(value))           return "Asian";
+  return "Other";
+}
+
+const GROUP_ORDER: LangGroup[] = ["Arabic Dialects", "Popular", "Asian", "Other"];
+const GROUP_ICONS: Record<LangGroup, string> = {
+  "Arabic Dialects": "🌙", "Popular": "⭐", "Asian": "🌏", "Other": "🌐",
+};
+
+const GROUPED = GROUP_ORDER.reduce<Record<LangGroup, Language[]>>(
+  (acc, g) => ({ ...acc, [g]: LANGUAGES.filter((l) => langGroup(l.value) === g) }),
+  {} as Record<LangGroup, Language[]>
+);
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 type Status = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
+type Mode   = "transcribe" | "translate";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
-
-type Mode = "transcribe" | "translate";
 
 function getSteps(mode: Mode) {
   return mode === "translate"
     ? [
-        { label: "Uploading file", icon: "upload" as const },
-        { label: "Transcribing audio", icon: "mic" as const },
-        { label: "Translating subtitles", icon: "globe" as const },
-        { label: "Ready to download", icon: "check" as const },
+        { label: "Uploading file",       icon: "upload" as const },
+        { label: "Transcribing audio",   icon: "mic"    as const },
+        { label: "Translating subtitles",icon: "globe"  as const },
+        { label: "Ready to download",    icon: "check"  as const },
       ]
     : [
-        { label: "Uploading file", icon: "upload" as const },
-        { label: "Transcribing audio", icon: "mic" as const },
-        { label: "Ready to download", icon: "check" as const },
+        { label: "Uploading file",     icon: "upload" as const },
+        { label: "Transcribing audio", icon: "mic"    as const },
+        { label: "Ready to download",  icon: "check"  as const },
       ];
 }
 
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export default function UploadCard() {
-  const [dragging, setDragging] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [mode, setMode] = useState<Mode>("translate");
-  const [targetLang, setTargetLang] = useState("en");
-  const [status, setStatus] = useState<Status>("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [dragging, setDragging]         = useState(false);
+  const [file, setFile]                 = useState<File | null>(null);
+  const [mode, setMode]                 = useState<Mode>("translate");
+  const [targetLang, setTargetLang]     = useState("en");
+  const [status, setStatus]             = useState<Status>("idle");
+  const [error, setError]               = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl]   = useState<string | null>(null);
   const [downloadFilename, setDownloadFilename] = useState("subtitles.srt");
   const [detectedLang, setDetectedLang] = useState<string | null>(null);
-  const [stepIndex, setStepIndex] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [stepIndex, setStepIndex]       = useState(0);
+  const [progress, setProgress]         = useState(0);
+
+  // Language picker state
+  const [langOpen, setLangOpen]   = useState(false);
+  const [langQuery, setLangQuery] = useState("");
+  const langRef     = useRef<HTMLDivElement>(null);
+  const langSearchRef = useRef<HTMLInputElement>(null);
+
+  const inputRef           = useRef<HTMLInputElement>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isProcessing = ["uploading", "transcribing", "translating"].includes(status);
   const showProgress = isProcessing || status === "done";
 
-  const steps = getSteps(mode);
+  const steps    = getSteps(mode);
+  const statuses = steps.map((_, i) =>
+    i < stepIndex ? ("done" as const) : i === stepIndex ? ("active" as const) : ("pending" as const)
+  );
 
-  const statuses = steps.map((_, i) => {
-    if (i < stepIndex) return "done" as const;
-    if (i === stepIndex) return "active" as const;
-    return "pending" as const;
-  });
+  const selectedLang = LANGUAGES.find((l) => l.value === targetLang);
+  const selectedFlag = selectedLang ? (FLAGS[selectedLang.value] ?? "🌐") : "🌐";
+
+  // Close lang dropdown on outside click
+  useEffect(() => {
+    if (!langOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (langRef.current && !langRef.current.contains(e.target as Node)) {
+        setLangOpen(false);
+        setLangQuery("");
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [langOpen]);
+
+  // Focus search when dropdown opens
+  useEffect(() => {
+    if (langOpen) setTimeout(() => langSearchRef.current?.focus(), 30);
+  }, [langOpen]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!langOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setLangOpen(false); setLangQuery(""); }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [langOpen]);
+
+  const filteredLangs = langQuery.trim()
+    ? LANGUAGES.filter((l) =>
+        l.label.toLowerCase().includes(langQuery.toLowerCase()) ||
+        l.promptName.toLowerCase().includes(langQuery.toLowerCase())
+      )
+    : null;
+
+  const pickLang = (value: string) => {
+    setTargetLang(value);
+    setLangOpen(false);
+    setLangQuery("");
+    resetResult();
+  };
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   const formatBytes = (bytes: number) =>
     bytes < 1024 * 1024
@@ -70,10 +161,7 @@ export default function UploadCard() {
     setProgress(from);
     progressIntervalRef.current = setInterval(() => {
       setProgress((prev) => {
-        if (prev >= to) {
-          stopProgressInterval();
-          return to;
-        }
+        if (prev >= to) { stopProgressInterval(); return to; }
         return prev + 0.3;
       });
     }, 300);
@@ -93,9 +181,7 @@ export default function UploadCard() {
   const validateAndSetFile = (f: File) => {
     resetResult();
     if (f.size > MAX_FILE_SIZE) {
-      setError(
-        `File is ${formatBytes(f.size)} — Whisper's limit is 25 MB. Please compress or trim the file first.`
-      );
+      setError(`File is ${formatBytes(f.size)} — Whisper's limit is 25 MB. Please compress or trim the file first.`);
       setStatus("error");
       return;
     }
@@ -110,8 +196,8 @@ export default function UploadCard() {
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0];
-    if (selected) validateAndSetFile(selected);
+    const sel = e.target.files?.[0];
+    if (sel) validateAndSetFile(sel);
   };
 
   const handleSubmit = async () => {
@@ -119,10 +205,7 @@ export default function UploadCard() {
     resetResult();
 
     try {
-      // ── Step 0 active: Uploading ──────────────────────────────────────────
-      setStepIndex(0);
-      setProgress(5);
-      setStatus("uploading");
+      setStepIndex(0); setProgress(5); setStatus("uploading");
 
       const urlRes = await fetch("/api/upload-url", {
         method: "POST",
@@ -136,7 +219,6 @@ export default function UploadCard() {
       const { token, storagePath } = await urlRes.json();
       setProgress(12);
 
-      // ── Upload directly to Supabase ───────────────────────────────────────
       const supabase = createClient();
       const { error: uploadError } = await supabase.storage
         .from("temp-uploads")
@@ -145,12 +227,7 @@ export default function UploadCard() {
         });
       if (uploadError) throw new Error(uploadError.message);
 
-      // ── Step 1 active: Transcribing ───────────────────────────────────────
-      setStepIndex(1);
-      setProgress(25);
-      setStatus("transcribing");
-
-      // Slow-fill from 25% → 70% while waiting for API
+      setStepIndex(1); setProgress(25); setStatus("transcribing");
       startSlowFill(25, 70);
 
       const transcribeRes = await fetch("/api/transcribe", {
@@ -163,7 +240,6 @@ export default function UploadCard() {
           originalName: file.name,
         }),
       });
-
       stopProgressInterval();
 
       if (!transcribeRes.ok) {
@@ -172,18 +248,12 @@ export default function UploadCard() {
       }
 
       if (mode === "translate") {
-        // ── Step 2 active: Translating ──────────────────────────────────────
-        setStepIndex(2);
-        setProgress(75);
-        setStatus("translating");
+        setStepIndex(2); setProgress(75); setStatus("translating");
         startSlowFill(75, 92);
-
-        // Small delay to let the "translating" state render before we finalize
         await new Promise((r) => setTimeout(r, 400));
         stopProgressInterval();
       }
 
-      // Read detected language from response header
       const detected = transcribeRes.headers.get("X-Detected-Language");
       if (detected) setDetectedLang(formatDetectedLanguage(detected));
 
@@ -196,10 +266,7 @@ export default function UploadCard() {
 
       setDownloadUrl(downloadObjectUrl);
       setDownloadFilename(filename);
-
-      // ── Final step done ───────────────────────────────────────────────────
-      const lastStep = steps.length - 1;
-      setStepIndex(lastStep + 1); // all steps done
+      setStepIndex(steps.length); // all done
       setProgress(100);
       setStatus("done");
     } catch (err) {
@@ -209,8 +276,11 @@ export default function UploadCard() {
     }
   };
 
+  // ── Render ────────────────────────────────────────────────────────────────────
+
   return (
     <div className="card p-6">
+
       {/* Drop zone */}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -218,27 +288,19 @@ export default function UploadCard() {
         onDrop={handleDrop}
         onClick={() => !isProcessing && !showProgress && inputRef.current?.click()}
         className={`border-2 border-dashed rounded-xl p-10 text-center transition-all duration-200 ${
-          isProcessing
-            ? "border-purple-500/30 bg-purple-500/5 cursor-default"
-            : dragging
-            ? "border-purple-500 bg-purple-500/10 cursor-pointer"
-            : file
-            ? "border-purple-500/40 bg-purple-500/5 cursor-pointer"
-            : "border-white/15 hover:border-purple-500/40 hover:bg-white/3 cursor-pointer"
+          isProcessing            ? "border-purple-500/30 bg-purple-500/5 cursor-default"
+          : dragging              ? "border-purple-500 bg-purple-500/10 cursor-pointer"
+          : file                  ? "border-purple-500/40 bg-purple-500/5 cursor-pointer"
+          : "border-white/15 hover:border-purple-500/40 hover:bg-white/3 cursor-pointer"
         }`}
       >
-        <input
-          ref={inputRef}
-          type="file"
+        <input ref={inputRef} type="file" className="hidden"
           accept="video/mp4,video/quicktime,video/mov,video/x-msvideo,video/webm,audio/mpeg,audio/mp4,audio/x-m4a,audio/m4a,audio/wav,audio/x-wav,audio/ogg,audio/webm,.mp4,.mov,.avi,.webm,.mp3,.m4a,.wav,.ogg"
-          className="hidden"
           onChange={handleFileChange}
         />
 
         {isProcessing ? (
-          <div>
-            <p className="font-semibold text-white/60 text-sm">{file?.name}</p>
-          </div>
+          <p className="font-semibold text-white/60 text-sm">{file?.name}</p>
         ) : status === "done" && downloadUrl ? (
           <div>
             <div className="text-4xl mb-3">✅</div>
@@ -252,10 +314,8 @@ export default function UploadCard() {
               </span>
             )}
             <p className="text-sm text-white/40 mt-2">{file?.name}</p>
-            <button
-              onClick={(e) => { e.stopPropagation(); setFile(null); resetResult(); }}
-              className="mt-3 text-xs text-white/30 hover:text-white/60 transition-colors"
-            >
+            <button onClick={(e) => { e.stopPropagation(); setFile(null); resetResult(); }}
+              className="mt-3 text-xs text-white/30 hover:text-white/60 transition-colors">
               Start over
             </button>
           </div>
@@ -264,10 +324,8 @@ export default function UploadCard() {
             <div className="text-4xl mb-3">🎬</div>
             <p className="font-semibold text-white">{file.name}</p>
             <p className="text-sm text-white/40 mt-1">{formatBytes(file.size)}</p>
-            <button
-              onClick={(e) => { e.stopPropagation(); setFile(null); resetResult(); }}
-              className="mt-3 text-xs text-white/30 hover:text-white/60 transition-colors"
-            >
+            <button onClick={(e) => { e.stopPropagation(); setFile(null); resetResult(); }}
+              className="mt-3 text-xs text-white/30 hover:text-white/60 transition-colors">
               Remove file
             </button>
           </div>
@@ -285,14 +343,11 @@ export default function UploadCard() {
       <div className="mt-5">
         <div className="flex rounded-xl overflow-hidden border border-white/10 p-1 bg-white/5">
           {(["transcribe", "translate"] as Mode[]).map((m) => (
-            <button
-              key={m}
+            <button key={m} type="button"
               onClick={() => { setMode(m); resetResult(); }}
               disabled={isProcessing}
               className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed ${
-                mode === m
-                  ? "bg-purple-600 text-white shadow shadow-purple-900/40"
-                  : "text-white/50 hover:text-white/80"
+                mode === m ? "bg-purple-600 text-white shadow shadow-purple-900/40" : "text-white/50 hover:text-white/80"
               }`}
             >
               {m === "transcribe" ? (
@@ -315,14 +370,103 @@ export default function UploadCard() {
         </div>
       </div>
 
-      {/* Target language dropdown — only shown in translate mode */}
+      {/* ── Language picker — custom div-based dropdown, no <select> ── */}
       {mode === "translate" && (
-        <div className="mt-3">
-          <LanguagePicker
-            value={targetLang}
-            onChange={(v) => { setTargetLang(v); resetResult(); }}
+        <div ref={langRef} className="mt-3 relative">
+
+          {/* Trigger button */}
+          <button
+            type="button"
             disabled={isProcessing}
-          />
+            onClick={() => { if (!isProcessing) setLangOpen((o) => !o); }}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              borderColor: langOpen ? "rgba(168,85,247,0.6)" : "rgba(255,255,255,0.15)",
+            }}
+          >
+            <span className="text-2xl leading-none">{selectedFlag}</span>
+            <span className="flex-1 text-left text-white text-sm font-medium">
+              {selectedLang?.label ?? "Select language"}
+            </span>
+            <svg
+              className="w-4 h-4 text-white/40 shrink-0 transition-transform duration-200"
+              style={{ transform: langOpen ? "rotate(180deg)" : "rotate(0deg)" }}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {/* Dropdown panel */}
+          {langOpen && (
+            <div
+              className="absolute left-0 right-0 top-full mt-1 rounded-xl border border-white/10 shadow-2xl overflow-hidden"
+              style={{
+                zIndex: 100,
+                background: "linear-gradient(160deg, #1c0b35 0%, #130720 100%)",
+              }}
+            >
+              {/* Search */}
+              <div className="p-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                <div className="relative">
+                  <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30 pointer-events-none"
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  <input
+                    ref={langSearchRef}
+                    type="text"
+                    placeholder="Search languages..."
+                    value={langQuery}
+                    onChange={(e) => setLangQuery(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 text-sm text-white placeholder-white/30 rounded-lg outline-none"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  />
+                </div>
+              </div>
+
+              {/* Language list */}
+              <div className="overflow-y-auto" style={{ maxHeight: "280px" }}>
+                {filteredLangs ? (
+                  // Search results
+                  filteredLangs.length === 0 ? (
+                    <p className="text-center text-white/30 text-sm py-6">No languages found</p>
+                  ) : (
+                    <div className="p-2 grid grid-cols-2 gap-1">
+                      {filteredLangs.map((lang) => (
+                        <LangOption key={lang.value} lang={lang} flag={FLAGS[lang.value] ?? "🌐"}
+                          selected={lang.value === targetLang} onSelect={pickLang} />
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  // Grouped list
+                  GROUP_ORDER.map((group) => {
+                    const langs = GROUPED[group];
+                    if (!langs.length) return null;
+                    return (
+                      <div key={group}>
+                        <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
+                          <span className="text-xs">{GROUP_ICONS[group]}</span>
+                          <span className="text-xs font-semibold uppercase tracking-wider"
+                            style={{ color: "rgba(255,255,255,0.35)" }}>
+                            {group}
+                          </span>
+                        </div>
+                        <div className="px-2 pb-1 grid grid-cols-2 gap-1">
+                          {langs.map((lang) => (
+                            <LangOption key={lang.value} lang={lang} flag={FLAGS[lang.value] ?? "🌐"}
+                              selected={lang.value === targetLang} onSelect={pickLang} />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -333,20 +477,19 @@ export default function UploadCard() {
         </div>
       )}
 
-      {/* Progress steps — shown while processing or done */}
+      {/* Progress steps */}
       {showProgress && (
-        <div className="mt-5 p-4 bg-white/3 rounded-xl border border-white/8">
+        <div className="mt-5 p-4 rounded-xl border border-white/8" style={{ background: "rgba(255,255,255,0.02)" }}>
           <ProgressSteps steps={steps} statuses={statuses} progress={progress} />
         </div>
       )}
 
-      {/* Actions */}
+      {/* Generate button */}
       {!showProgress && (
-        <div className="mt-5 flex gap-3">
-          <button
-            onClick={handleSubmit}
+        <div className="mt-5">
+          <button type="button" onClick={handleSubmit}
             disabled={!file || isProcessing}
-            className={`flex-1 btn-primary flex items-center justify-center gap-2 ${
+            className={`w-full btn-primary flex items-center justify-center gap-2 ${
               !file || isProcessing ? "opacity-40 cursor-not-allowed hover:scale-100" : ""
             }`}
           >
@@ -356,27 +499,64 @@ export default function UploadCard() {
         </div>
       )}
 
-      {/* Download button — shown after done */}
+      {/* Download */}
       {status === "done" && downloadUrl && (
         <div className="mt-3 flex gap-3">
-          <a
-            href={downloadUrl}
-            download={downloadFilename}
-            className="flex-1 btn-primary flex items-center justify-center gap-2"
-          >
+          <a href={downloadUrl} download={downloadFilename}
+            className="flex-1 btn-primary flex items-center justify-center gap-2">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
             Download SRT
           </a>
-          <button
-            onClick={() => { setFile(null); resetResult(); }}
-            className="px-4 py-2 rounded-xl border border-white/10 text-sm text-white/50 hover:text-white/80 hover:border-white/20 transition-all"
-          >
+          <button type="button" onClick={() => { setFile(null); resetResult(); }}
+            className="px-4 py-2 rounded-xl border border-white/10 text-sm text-white/50 hover:text-white/80 hover:border-white/20 transition-all">
             New file
           </button>
         </div>
       )}
+
     </div>
+  );
+}
+
+// ── LangOption ─────────────────────────────────────────────────────────────────
+
+function LangOption({
+  lang, flag, selected, onSelect,
+}: {
+  lang: Language; flag: string; selected: boolean; onSelect: (v: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(lang.value)}
+      className="flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all duration-100 w-full"
+      style={{
+        background:   selected ? "rgba(147,51,234,0.35)" : "transparent",
+        border:       selected ? "1px solid rgba(168,85,247,0.5)" : "1px solid transparent",
+        color:        selected ? "#fff" : "rgba(255,255,255,0.65)",
+      }}
+      onMouseEnter={(e) => {
+        if (!selected) {
+          (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.06)";
+          (e.currentTarget as HTMLButtonElement).style.color = "#fff";
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!selected) {
+          (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+          (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.65)";
+        }
+      }}
+    >
+      <span className="text-lg leading-none shrink-0">{flag}</span>
+      <span className="text-xs font-medium leading-tight">{lang.label}</span>
+      {selected && (
+        <svg className="w-3 h-3 ml-auto shrink-0 text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+        </svg>
+      )}
+    </button>
   );
 }
