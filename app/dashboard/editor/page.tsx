@@ -1658,9 +1658,43 @@ function VideoExportModal({
   // Helper: upload the video blob to export-uploads, returns the new storagePath
   const uploadVideoBlob = async (): Promise<string> => {
     if (!audioUrl) throw new Error("No video available to upload.");
-    const videoBlob = await fetch(audioUrl).then(r => r.blob());
-    const filename  = rawFilename ?? "video.mp4";
 
+    // Blob URLs are session-only — verify it's still readable before trying to upload
+    if (audioUrl.startsWith("blob:")) {
+      try {
+        const probe = await fetch(audioUrl, { method: "HEAD" }).catch(() => null);
+        if (!probe || !probe.ok) {
+          throw new Error("Please re-upload your video — the session has expired");
+        }
+      } catch (probeErr) {
+        const msg = probeErr instanceof Error ? probeErr.message : String(probeErr);
+        if (msg.includes("session has expired")) throw probeErr;
+        throw new Error("Please re-upload your video — the session has expired");
+      }
+    }
+
+    // Fetch the blob with a 60-second timeout
+    const blobController = new AbortController();
+    const blobTimer = setTimeout(() => blobController.abort(), 60_000);
+    let videoBlob: Blob;
+    try {
+      const blobRes = await fetch(audioUrl, { signal: blobController.signal });
+      if (!blobRes.ok) throw new Error(`Could not read video file (status ${blobRes.status})`);
+      videoBlob = await blobRes.blob();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      console.error("[upload] Failed to read video blob:", msg);
+      if ((err as { name?: string }).name === "AbortError")
+        throw new Error("Reading video file timed out — file may be too large");
+      throw new Error(`Could not read video file: ${msg}`);
+    } finally {
+      clearTimeout(blobTimer);
+    }
+
+    const filename = rawFilename ?? "video.mp4";
+    console.log(`[upload] Starting video upload, blob size: ${videoBlob.size} bytes`);
+
+    // Get a signed Supabase upload URL
     const urlRes = await fetch("/api/upload-export-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1668,21 +1702,54 @@ function VideoExportModal({
     });
     if (!urlRes.ok) {
       const e = await urlRes.json().catch(() => ({}));
-      throw new Error(e.error ?? "Failed to get upload URL");
+      throw new Error(e.error ?? "Failed to get upload URL from server");
     }
     const { signedUrl, storagePath: newPath } = await urlRes.json();
 
-    const uploadRes = await fetch(signedUrl, {
-      method: "PUT",
-      headers: { "Content-Type": videoBlob.type || "application/octet-stream" },
-      body: videoBlob,
-    });
-    if (!uploadRes.ok) throw new Error("Failed to upload video to storage");
+    // Upload to Supabase with a 60-second timeout, retry once on failure
+    const doUpload = async (): Promise<Response> => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60_000);
+      try {
+        return await fetch(signedUrl, {
+          method: "PUT",
+          headers: { "Content-Type": videoBlob.type || "application/octet-stream" },
+          body: videoBlob,
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    let uploadRes: Response;
+    try {
+      uploadRes = await doUpload();
+    } catch (firstErr) {
+      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+      console.warn(`[upload] First attempt failed (${msg}), retrying…`);
+      try {
+        uploadRes = await doUpload();
+      } catch (retryErr) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        console.error("[upload] Failed:", retryMsg);
+        if ((retryErr as { name?: string }).name === "AbortError")
+          throw new Error("Upload timed out — check your internet connection and try again");
+        throw new Error(`Upload failed: ${retryMsg}`);
+      }
+    }
+
+    if (!uploadRes.ok) {
+      const detail = await uploadRes.text().catch(() => "");
+      console.error(`[upload] Upload failed: HTTP ${uploadRes.status} — ${detail}`);
+      throw new Error(`Upload failed (HTTP ${uploadRes.status})${detail ? ": " + detail.slice(0, 120) : ""}`);
+    }
 
     // Persist the new path so subsequent exports reuse it
     localStorage.setItem("darijasub_video_url", newPath);
     localStorage.setItem("darijasub_upload_ready", "true");
 
+    console.log(`[upload] Upload complete, storage path: ${newPath}`);
     return newPath;
   };
 
