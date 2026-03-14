@@ -77,17 +77,31 @@ export async function POST(request: NextRequest) {
     console.log(`[/api/export-video] Video downloaded: ${videoBuffer.byteLength} bytes`);
     await writeFile(inputPath, videoBuffer);
 
-    await writeFile(assPath, assContent, "utf8");
+    // Force NotoSansArabic for every style — it covers Arabic + Latin + all
+    // supported languages, and is the only font guaranteed on the server.
+    const assPatched = assContent.replace(
+      /^(Style:\s+[^,]+),([^,]+),/m,
+      "$1,NotoSansArabic,"
+    );
+    console.log(`[/api/export-video] ASS font patched; first dialogue: ${
+      assPatched.split("\n").find(l => l.startsWith("Dialogue:")) ?? "(none)"
+    }`);
+
+    await writeFile(assPath, assPatched, "utf8");
     const { size: assFileSize } = await import("fs/promises").then(({ stat }) => stat(assPath));
     console.log(`[/api/export-video] ASS written to ${assPath}: ${assFileSize} bytes`);
 
-    // Build video filter
+    // Fonts dir — bundled inside the Next.js project's public/fonts/
+    const fontsDir = path.join(process.cwd(), "public", "fonts");
+
+    // Build video filter with explicit fontsdir so ffmpeg finds NotoSansArabic
+    const assArg = `${assPath.replace(/\\/g, "/")}:fontsdir=${fontsDir.replace(/\\/g, "/")}`;
     const vf =
       `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,` +
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
-      `ass=${assPath.replace(/\\/g, "/")}`;
+      `ass=${assArg}`;
 
-    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} platform=${platform}`);
+    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} platform=${platform} fontsdir=${fontsDir}`);
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
         .outputOptions([
@@ -100,6 +114,7 @@ export async function POST(request: NextRequest) {
           "-movflags", "+faststart",
         ])
         .output(outputPath)
+        .on("stderr", (line) => console.log("[ffmpeg stderr]", line))
         .on("end", () => { console.log("[/api/export-video] ffmpeg done"); resolve(); })
         .on("error", (err, _stdout, stderr) => {
           console.error("[/api/export-video] ffmpeg error:", err.message);
