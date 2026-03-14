@@ -148,17 +148,20 @@ export async function POST(request: NextRequest) {
     const styleLineString = assPatched.split("\n").find(l => l.startsWith("Style:")) ?? "(not found)";
     console.log("[export-video] ASS Style line:", styleLineString);
     console.log("[export-video] ASS first Dialogue:", assPatched.split("\n").find(l => l.startsWith("Dialogue:")) ?? "(none)");
+    // Log full ASS content for deep diagnosis
+    console.log("[export-video] FULL ASS CONTENT:\n" + assPatched);
 
     await writeFile(assPath, assPatched, "utf8");
     const { size: assFileSize } = await import("fs/promises").then(({ stat }) => stat(assPath));
     console.log(`[/api/export-video] ASS written to ${assPath}: ${assFileSize} bytes`);
 
-    // fontsdir=/tmp — NotoSansArabic.ttf is now there
+    // Use subtitles= filter (behaves differently to ass= on some ffmpeg builds)
+    // fontsdir=/tmp — NotoSansArabic.ttf is there
     const assArg = `${assPath}:fontsdir=/tmp`;
     const vf =
       `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,` +
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
-      `ass=${assArg}`;
+      `subtitles=${assArg}`;
 
     console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} preset=${preset} platform=${platform}`);
     console.log(`[/api/export-video] vf: ${vf}`);
@@ -188,6 +191,7 @@ export async function POST(request: NextRequest) {
     });
 
     const outBuffer = await readFile(outputPath);
+    console.log("[export-video] output size:", outBuffer.byteLength);
     await cleanup();
 
     // Delete source video from Supabase
