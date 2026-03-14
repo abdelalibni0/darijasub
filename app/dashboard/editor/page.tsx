@@ -77,6 +77,38 @@ function loadStyle(): SubStyle {
   return { ...DEFAULT_STYLE };
 }
 
+// ── Filler Word Remover ────────────────────────────────────────────────────────
+
+interface FillerWord { word: string; lang: "EN" | "FR" | "AR" }
+
+const FILLER_WORDS: FillerWord[] = [
+  // English
+  { word: "uhh",       lang: "EN" }, { word: "umm",      lang: "EN" },
+  { word: "uh",        lang: "EN" }, { word: "um",       lang: "EN" },
+  { word: "like",      lang: "EN" }, { word: "you know", lang: "EN" },
+  { word: "basically", lang: "EN" }, { word: "literally", lang: "EN" },
+  { word: "actually",  lang: "EN" }, { word: "right",    lang: "EN" },
+  { word: "so",        lang: "EN" }, { word: "well",     lang: "EN" },
+  // French
+  { word: "euh",   lang: "FR" }, { word: "ben",   lang: "FR" },
+  { word: "bah",   lang: "FR" }, { word: "voilà", lang: "FR" },
+  { word: "genre", lang: "FR" }, { word: "quoi",  lang: "FR" },
+  // Darija / Arabic
+  { word: "يعني",  lang: "AR" }, { word: "واش",   lang: "AR" },
+  { word: "هاك",   lang: "AR" }, { word: "ولا",   lang: "AR" },
+  { word: "كيفاش", lang: "AR" }, { word: "هههه",  lang: "AR" },
+  { word: "آآآ",   lang: "AR" }, { word: "اممم",  lang: "AR" },
+];
+
+function removeFillerWord(text: string, word: string): string {
+  const isArabic = /[\u0600-\u06FF]/.test(word);
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = isArabic
+    ? new RegExp(`(?:^|\\s)${escaped}(?=\\s|$)`, "g")
+    : new RegExp(`\\b${escaped}\\b`, "gi");
+  return text.replace(re, " ").replace(/\s{2,}/g, " ").trim();
+}
+
 // ── DisplaySegment ─────────────────────────────────────────────────────────────
 
 interface DisplaySegment extends EditorSegment {
@@ -133,6 +165,18 @@ export default function EditorPage() {
   // Map of segment id → original Arabic text, so toggling back is free
   const arabicOriginalRef = useRef<Map<number, string>>(new Map());
 
+  // Clean (filler word remover) popover
+  const [cleanOpen, setCleanOpen]       = useState(false);
+  const [checkedFillers, setCheckedFillers] = useState<Set<string>>(
+    () => new Set(FILLER_WORDS.map((f) => f.word))
+  );
+  const [customFiller, setCustomFiller] = useState("");
+  const [cleanPreview, setCleanPreview] = useState<{ counts: [string, number][]; affected: number } | null>(null);
+  const cleanPopoverRef                 = useRef<HTMLDivElement>(null);
+
+  // Toast notification
+  const [toast, setToast] = useState<string | null>(null);
+
   const audioRef       = useRef<HTMLAudioElement>(null);
   const segRefs        = useRef<Map<number, HTMLDivElement>>(new Map());
   const userSeekingRef = useRef(false);
@@ -180,6 +224,24 @@ export default function EditorPage() {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [chunkOpen]);
+
+  // Close clean popover on outside click
+  useEffect(() => {
+    if (!cleanOpen) return;
+    const h = (e: MouseEvent) => {
+      if (cleanPopoverRef.current && !cleanPopoverRef.current.contains(e.target as Node))
+        setCleanOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [cleanOpen]);
+
+  // Auto-clear toast
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // ── Audio ──────────────────────────────────────────────────────────────────
 
@@ -309,6 +371,55 @@ export default function EditorPage() {
     }
 
     setChunkOpen(false);
+  };
+
+  // ── Filler word remover ─────────────────────────────────────────────────────
+
+  const computeCleanPreview = () => {
+    const allWords = [
+      ...Array.from(checkedFillers),
+      ...customFiller.split(",").map((s) => s.trim()).filter(Boolean),
+    ];
+    const counts = new Map<string, number>();
+    const affectedSet = new Set<number>();
+    for (const seg of segments) {
+      for (const word of allWords) {
+        const isArabic = /[\u0600-\u06FF]/.test(word);
+        const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = isArabic
+          ? new RegExp(`(?:^|\\s)${escaped}(?=\\s|$)`, "g")
+          : new RegExp(`\\b${escaped}\\b`, "gi");
+        const matches = seg.text.match(re);
+        if (matches && matches.length > 0) {
+          counts.set(word, (counts.get(word) ?? 0) + matches.length);
+          affectedSet.add(seg.id);
+        }
+      }
+    }
+    setCleanPreview({
+      counts:   Array.from(counts.entries()).filter(([, n]) => n > 0),
+      affected: affectedSet.size,
+    });
+  };
+
+  const applyClean = () => {
+    const allWords = [
+      ...Array.from(checkedFillers),
+      ...customFiller.split(",").map((s) => s.trim()).filter(Boolean),
+    ];
+    let changedCount = 0;
+    const next = segments
+      .map((seg) => {
+        let text = seg.text;
+        for (const word of allWords) text = removeFillerWord(text, word);
+        if (text !== seg.text) changedCount++;
+        return { ...seg, text };
+      })
+      .filter((seg) => seg.text.trim().length > 0);
+    setSegments(next);
+    setCleanPreview(null);
+    setCleanOpen(false);
+    setToast(`Removed fillers from ${changedCount} segment${changedCount !== 1 ? "s" : ""}`);
   };
 
   // ── Font upload ────────────────────────────────────────────────────────────
@@ -500,6 +611,113 @@ export default function EditorPage() {
                   style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff", boxShadow: "0 4px 14px rgba(124,58,237,0.35)" }}>
                   Apply Chunking
                 </button>
+              </div>
+            )}
+          </div>
+
+          {/* Clean (filler word remover) popover */}
+          <div ref={cleanPopoverRef} className="relative">
+            <button type="button" onClick={() => { setCleanOpen((o) => !o); setCleanPreview(null); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+              style={{
+                background:   cleanOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
+                borderColor:  cleanOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
+                color:        cleanOpen ? "#d8b4fe" : "rgba(255,255,255,0.65)",
+              }}>
+              <span>✂️</span>
+              <span className="hidden sm:inline">Clean</span>
+            </button>
+
+            {cleanOpen && (
+              <div className="absolute right-0 top-full mt-2 rounded-xl border border-white/10 shadow-2xl p-4 w-80 max-h-[80vh] overflow-y-auto"
+                style={{ background: "linear-gradient(160deg,#1c0b35 0%,#110620 100%)", zIndex: 200 }}>
+                <p className="text-white/80 text-xs font-semibold mb-3">Remove Filler Words</p>
+
+                {/* Filler checkboxes by language */}
+                {(["EN", "FR", "AR"] as const).map((lang) => (
+                  <div key={lang} className="mb-3">
+                    <p className="text-white/30 text-xs mb-1.5 uppercase tracking-wider">
+                      {lang === "EN" ? "English" : lang === "FR" ? "French" : "Darija / Arabic"}
+                    </p>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {FILLER_WORDS.filter((f) => f.lang === lang).map((f) => (
+                        <label key={f.word} className="flex items-center gap-1 cursor-pointer select-none"
+                          style={{ color: checkedFillers.has(f.word) ? "#d8b4fe" : "rgba(255,255,255,0.35)" }}>
+                          <input type="checkbox" checked={checkedFillers.has(f.word)}
+                            onChange={(e) => {
+                              setCheckedFillers((prev) => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(f.word); else next.delete(f.word);
+                                return next;
+                              });
+                              setCleanPreview(null);
+                            }}
+                            className="accent-purple-500 w-3 h-3" />
+                          <span className="text-xs" dir={lang === "AR" ? "rtl" : "ltr"}>{f.word}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {/* Custom words */}
+                <div className="mb-3">
+                  <p className="text-white/30 text-xs mb-1.5 uppercase tracking-wider">Custom (comma-separated)</p>
+                  <input type="text" value={customFiller}
+                    onChange={(e) => { setCustomFiller(e.target.value); setCleanPreview(null); }}
+                    placeholder="e.g. literally, tbh, wlah"
+                    className="w-full px-2.5 py-1.5 rounded-lg text-xs outline-none placeholder:text-white/20"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff" }} />
+                </div>
+
+                {/* Preview panel */}
+                {cleanPreview && (
+                  <div className="mb-3 p-2.5 rounded-lg text-xs"
+                    style={{ background: "rgba(124,58,237,0.15)", border: "1px solid rgba(124,58,237,0.3)" }}>
+                    {cleanPreview.counts.length === 0 ? (
+                      <p className="text-white/50">No fillers found in current segments.</p>
+                    ) : (
+                      <>
+                        <p className="text-purple-300 font-semibold mb-1">
+                          {cleanPreview.affected} segment{cleanPreview.affected !== 1 ? "s" : ""} affected
+                        </p>
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-white/60">
+                          {cleanPreview.counts.map(([word, n]) => (
+                            <span key={word}>"{word}" ×{n}</span>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                {!cleanPreview ? (
+                  <button type="button" onClick={computeCleanPreview}
+                    className="w-full py-2 rounded-lg text-sm font-semibold"
+                    style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff", boxShadow: "0 4px 14px rgba(124,58,237,0.35)" }}>
+                    Remove Fillers
+                  </button>
+                ) : cleanPreview.counts.length === 0 ? (
+                  <button type="button" onClick={() => setCleanPreview(null)}
+                    className="w-full py-2 rounded-lg text-sm font-semibold"
+                    style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.6)" }}>
+                    Close
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setCleanPreview(null)}
+                      className="flex-1 py-2 rounded-lg text-sm font-medium"
+                      style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.6)" }}>
+                      Cancel
+                    </button>
+                    <button type="button" onClick={applyClean}
+                      className="flex-1 py-2 rounded-lg text-sm font-semibold"
+                      style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff", boxShadow: "0 4px 14px rgba(124,58,237,0.35)" }}>
+                      Confirm & Apply
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -714,6 +932,14 @@ export default function EditorPage() {
           </p>
         )}
       </div>
+
+      {/* ── Toast notification ──────────────────────────────────────────────── */}
+      {toast && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-xl text-sm font-medium shadow-2xl pointer-events-none"
+          style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff", zIndex: 9999, boxShadow: "0 8px 32px rgba(124,58,237,0.5)" }}>
+          ✅ {toast}
+        </div>
+      )}
     </div>
   );
 }
