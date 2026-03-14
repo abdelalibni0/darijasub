@@ -1472,7 +1472,9 @@ function VideoExportModal({
       setProgress(97);
 
       const data = await ffmpeg.readFile("output.mp4") as Uint8Array;
-      const blob = new Blob([data], { type: "video/mp4" });
+      const ab = new ArrayBuffer(data.byteLength);
+      new Uint8Array(ab).set(data);
+      const blob = new Blob([ab], { type: "video/mp4" });
       const dlUrl = URL.createObjectURL(blob);
 
       const a = document.createElement("a");
