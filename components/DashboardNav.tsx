@@ -23,6 +23,10 @@ export default function DashboardNav({ user }: { user: User }) {
     router.refresh();
   };
 
+  const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? "aabaalimanager@gmail.com")
+    .split(",").map((e) => e.trim().toLowerCase());
+  const isAdmin = !!user.email && adminEmails.includes(user.email.toLowerCase());
+
   const displayName = user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "User";
   const initials = displayName
     .split(" ")
@@ -66,16 +70,30 @@ export default function DashboardNav({ user }: { user: User }) {
 
         {/* Plan badge */}
         <div className="mx-4 mb-4 card p-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-white/60">Free plan</span>
-            <span className="text-xs text-purple-400">35 min left</span>
-          </div>
-          <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-            <div className="h-full w-[35%] bg-gradient-to-r from-purple-600 to-purple-400 rounded-full" />
-          </div>
-          <button className="mt-3 w-full text-xs btn-primary py-2">
-            Upgrade plan
-          </button>
+          {isAdmin ? (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-white/60">Admin</span>
+                <span className="text-xs text-purple-400">Unlimited ∞</span>
+              </div>
+              <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div className="h-full w-full bg-gradient-to-r from-purple-600 to-purple-400 rounded-full" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-white/60">Free plan</span>
+                <span className="text-xs text-purple-400">35 min left</span>
+              </div>
+              <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div className="h-full w-[35%] bg-gradient-to-r from-purple-600 to-purple-400 rounded-full" />
+              </div>
+              <button className="mt-3 w-full text-xs btn-primary py-2">
+                Upgrade plan
+              </button>
+            </>
+          )}
         </div>
 
         {/* User */}

@@ -31,7 +31,18 @@ export default async function DashboardPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const adminEmails = (process.env.ADMIN_EMAILS ?? "aabaalimanager@gmail.com")
+    .split(",").map((e) => e.trim().toLowerCase());
+  const isAdmin = !!user?.email && adminEmails.includes(user.email.toLowerCase());
+
   const displayName = user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Creator";
+
+  const pageStats = [
+    { label: "Videos processed",    value: "3",                         icon: "🎬" },
+    { label: "Minutes transcribed", value: "65",                        icon: "⏱️" },
+    { label: "Subtitles exported",  value: "5",                         icon: "📄" },
+    { label: "Free minutes left",   value: isAdmin ? "Unlimited ∞" : "35", icon: "🎁" },
+  ];
 
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto">
@@ -45,7 +56,7 @@ export default async function DashboardPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
-        {stats.map((stat, i) => (
+        {pageStats.map((stat, i) => (
           <div key={i} className="card p-5">
             <div className="text-2xl mb-2">{stat.icon}</div>
             <div className="text-2xl font-black text-white">{stat.value}</div>
