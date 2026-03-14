@@ -64,11 +64,13 @@ export async function POST(request: NextRequest) {
 
     // Download source video from Supabase
     const admin = createAdminClient();
+    console.log(`[/api/export-video] Downloading storagePath="${storagePath}" from bucket="${EXPORT_BUCKET}"`);
     const { data: blob, error: dlErr } = await admin.storage
       .from(EXPORT_BUCKET)
       .download(storagePath);
     if (dlErr || !blob) {
-      throw new Error(dlErr?.message ?? "Failed to download source video from storage");
+      console.error(`[/api/export-video] Download failed for path="${storagePath}":`, dlErr?.message);
+      throw new Error("Video file not found in storage. Please try re-uploading your video.");
     }
 
     const videoBuffer = Buffer.from(await blob.arrayBuffer());
