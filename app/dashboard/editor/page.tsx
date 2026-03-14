@@ -732,6 +732,40 @@ function TimeInput({ value, onChange, onCommit }: { value: string; onChange: (v:
   );
 }
 
+// ── Subtitle Templates ─────────────────────────────────────────────────────────
+
+type TemplateCategory = "Trending" | "Glow" | "Classic" | "Arabic" | "Aesthetic";
+const TEMPLATE_CATEGORIES: TemplateCategory[] = ["Trending", "Glow", "Classic", "Arabic", "Aesthetic"];
+interface SubTemplate { name: string; style: SubStyle; }
+
+const SUBTITLE_TEMPLATES: Record<TemplateCategory, SubTemplate[]> = {
+  Trending: [
+    { name: "TikTok Viral", style: { fontSize: 28, fontFamily: "Impact",  bold: false, italic: false, textColor: "#ffffff", bgColor: "#000000", bgOpacity: 0,   strokeColor: "#000000", strokeWidth: 3,   position: "bottom-center" } },
+    { name: "Bold Yellow",  style: { fontSize: 28, fontFamily: "Impact",  bold: false, italic: false, textColor: "#FFE500", bgColor: "#000000", bgOpacity: 0,   strokeColor: "#000000", strokeWidth: 3,   position: "bottom-center" } },
+    { name: "Clean White",  style: { fontSize: 22, fontFamily: "Roboto",  bold: false, italic: false, textColor: "#ffffff", bgColor: "#000000", bgOpacity: 0,   strokeColor: "#000000", strokeWidth: 2,   position: "bottom-center" } },
+  ],
+  Glow: [
+    { name: "Neon Green",  style: { fontSize: 24, fontFamily: "Inter", bold: true, italic: false, textColor: "#00FF87", bgColor: "#000000", bgOpacity: 0, strokeColor: "#00FF87", strokeWidth: 1, position: "bottom-center" } },
+    { name: "Gold Glow",   style: { fontSize: 24, fontFamily: "Inter", bold: true, italic: false, textColor: "#FFD700", bgColor: "#000000", bgOpacity: 0, strokeColor: "#FFD700", strokeWidth: 1, position: "bottom-center" } },
+    { name: "Purple Haze", style: { fontSize: 24, fontFamily: "Inter", bold: true, italic: false, textColor: "#BF5FFF", bgColor: "#000000", bgOpacity: 0, strokeColor: "#BF5FFF", strokeWidth: 1, position: "bottom-center" } },
+  ],
+  Classic: [
+    { name: "Netflix", style: { fontSize: 22, fontFamily: "Georgia", bold: false, italic: false, textColor: "#ffffff", bgColor: "#000000", bgOpacity: 75,  strokeColor: "#000000", strokeWidth: 0, position: "bottom-center" } },
+    { name: "Cinema",  style: { fontSize: 20, fontFamily: "Georgia", bold: false, italic: true,  textColor: "#ffffff", bgColor: "#000000", bgOpacity: 85,  strokeColor: "#000000", strokeWidth: 0, position: "middle-center" } },
+    { name: "BBC",     style: { fontSize: 20, fontFamily: "Arial",   bold: true,  italic: false, textColor: "#ffffff", bgColor: "#FFE500", bgOpacity: 100, strokeColor: "#000000", strokeWidth: 0, position: "bottom-center" } },
+  ],
+  Arabic: [
+    { name: "Arabic Gold",   style: { fontSize: 26, fontFamily: "Inter",  bold: false, italic: false, textColor: "#FFD700", bgColor: "#1a1a1a", bgOpacity: 85, strokeColor: "#000000", strokeWidth: 0, position: "bottom-center" } },
+    { name: "Darija Street", style: { fontSize: 28, fontFamily: "Impact", bold: false, italic: false, textColor: "#ffffff", bgColor: "#6B2FD9", bgOpacity: 85, strokeColor: "#000000", strokeWidth: 0, position: "bottom-center" } },
+    { name: "Maghreb",       style: { fontSize: 24, fontFamily: "Inter",  bold: false, italic: false, textColor: "#ffffff", bgColor: "#2D6A2D", bgOpacity: 80, strokeColor: "#000000", strokeWidth: 0, position: "bottom-center" } },
+  ],
+  Aesthetic: [
+    { name: "Soft Pink",   style: { fontSize: 20, fontFamily: "Georgia", bold: false, italic: true,  textColor: "#ffffff", bgColor: "#FF6B9D", bgOpacity: 50, strokeColor: "#000000", strokeWidth: 0, position: "bottom-center" } },
+    { name: "Minimal",     style: { fontSize: 20, fontFamily: "Inter",   bold: false, italic: false, textColor: "#ffffff", bgColor: "#000000", bgOpacity: 0,  strokeColor: "#000000", strokeWidth: 1, position: "bottom-center" } },
+    { name: "Pastel Blue", style: { fontSize: 22, fontFamily: "Inter",   bold: false, italic: false, textColor: "#ffffff", bgColor: "#4A90D9", bgOpacity: 60, strokeColor: "#000000", strokeWidth: 0, position: "bottom-center" } },
+  ],
+};
+
 // ── StylePanel ─────────────────────────────────────────────────────────────────
 
 function StylePanel({
@@ -744,6 +778,9 @@ function StylePanel({
   onFontUpload: (f: File) => void;
 }) {
   const fontUploadRef = useRef<HTMLInputElement>(null);
+  const [activeCategory, setActiveCategory] = useState<TemplateCategory>("Trending");
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+
   const set = <K extends keyof SubStyle>(key: K, val: SubStyle[K]) => onChange({ ...style, [key]: val });
 
   const fontList = customFontLoaded ? [...FONT_OPTIONS, "Custom Font"] : FONT_OPTIONS;
@@ -792,6 +829,94 @@ function StylePanel({
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-5">
+
+        {/* ── TEMPLATES ─────────────────────────────────────────────────────── */}
+        <section>
+          <SectionLabel>Templates</SectionLabel>
+
+          {/* Category tabs — wrap to avoid horizontal scroll */}
+          <div className="flex flex-wrap gap-1 mb-3">
+            {TEMPLATE_CATEGORIES.map((cat) => (
+              <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
+                className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition-all"
+                style={{
+                  background: activeCategory === cat ? "rgba(147,51,234,0.4)" : "rgba(255,255,255,0.06)",
+                  border:     activeCategory === cat ? "1px solid rgba(168,85,247,0.5)" : "1px solid rgba(255,255,255,0.08)",
+                  color:      activeCategory === cat ? "#e9d5ff" : "rgba(255,255,255,0.45)",
+                }}>
+                {cat}
+              </button>
+            ))}
+          </div>
+
+          {/* Template cards — horizontal scroll */}
+          <div className="flex gap-2 overflow-x-auto pb-2"
+            style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.1) transparent" }}>
+            {SUBTITLE_TEMPLATES[activeCategory].map((tmpl) => {
+              const key = `${activeCategory}:${tmpl.name}`;
+              const isActive = selectedTemplate === key;
+              const cardTextStyle: React.CSSProperties = {
+                fontFamily:     tmpl.style.fontFamily,
+                fontWeight:     tmpl.style.bold   ? "bold"   : "normal",
+                fontStyle:      tmpl.style.italic ? "italic" : "normal",
+                fontSize:       "9px",
+                color:          tmpl.style.textColor,
+                backgroundColor: tmpl.style.bgOpacity > 0
+                  ? hexToRgba(tmpl.style.bgColor, tmpl.style.bgOpacity)
+                  : "transparent",
+                WebkitTextStroke: tmpl.style.strokeWidth > 0
+                  ? `${Math.min(tmpl.style.strokeWidth * 0.3, 0.8)}px ${tmpl.style.strokeColor}`
+                  : undefined,
+                padding:    tmpl.style.bgOpacity > 0 ? "0 3px" : undefined,
+                lineHeight: 1.3,
+                display:    "inline-block",
+                textAlign:  "center",
+                whiteSpace: "nowrap",
+                maxWidth:   "72px",
+                overflow:   "hidden",
+                textOverflow: "ellipsis",
+              };
+              return (
+                <button key={key} type="button"
+                  onClick={() => { onChange(tmpl.style); setSelectedTemplate(key); }}
+                  className="shrink-0 flex flex-col items-center gap-1.5 transition-all">
+                  {/* Card preview — 80×60 like CapCut */}
+                  <div className="rounded-lg overflow-hidden relative"
+                    style={{
+                      width: 80, height: 60,
+                      background: "linear-gradient(160deg,#1a1230 0%,#0a0814 100%)",
+                      border:     isActive ? "2px solid #a855f7" : "1px solid rgba(255,255,255,0.12)",
+                      boxShadow:  isActive ? "0 0 8px rgba(168,85,247,0.4)" : "none",
+                      transition: "border-color 0.15s, box-shadow 0.15s",
+                    }}>
+                    {/* Faint grid texture */}
+                    <div className="absolute inset-0 opacity-5"
+                      style={{
+                        backgroundImage: "linear-gradient(rgba(255,255,255,.3) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.3) 1px,transparent 1px)",
+                        backgroundSize: "25% 25%",
+                      }} />
+                    {/* Subtitle text anchored to bottom */}
+                    <div className="absolute bottom-2 inset-x-0 flex justify-center px-1">
+                      <span style={cardTextStyle}>واش نبدأو</span>
+                    </div>
+                  </div>
+                  {/* Template name */}
+                  <span style={{
+                    fontSize:  "9px",
+                    color:     isActive ? "#d8b4fe" : "rgba(255,255,255,0.4)",
+                    textAlign: "center",
+                    lineHeight: 1.2,
+                    maxWidth:  "78px",
+                    wordBreak: "break-word",
+                    transition: "color 0.15s",
+                  }}>
+                    {tmpl.name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
 
         {/* ── FONT ──────────────────────────────────────────────────────────── */}
         <section>
