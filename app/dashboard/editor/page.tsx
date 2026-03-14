@@ -171,19 +171,13 @@ export default function EditorPage() {
   const [customFiller, setCustomFiller] = useState("");
   const [cleanPreview, setCleanPreview] = useState<{ counts: [string, number][]; affected: number } | null>(null);
 
-  // "More ▾" dropdown
-  const [moreOpen, setMoreOpen] = useState(false);
-
   // Toolbar refs
-  const toolbarRef    = useRef<HTMLDivElement>(null);
   const chunkBtnRef   = useRef<HTMLButtonElement>(null);
-  const moreBtnRef    = useRef<HTMLButtonElement>(null);
+  const cleanBtnRef   = useRef<HTMLButtonElement>(null);
   const chunkPanelRef = useRef<HTMLDivElement>(null);
   const cleanPanelRef = useRef<HTMLDivElement>(null);
-  const morePanelRef  = useRef<HTMLDivElement>(null);
   const [chunkPos, setChunkPos] = useState<{ top: number; right: number } | null>(null);
-  const [cleanPos, setCleanPos] = useState<{ top: number; right: number } | null>(null);
-  const [morePos,  setMorePos]  = useState<{ top: number; right: number } | null>(null);
+  const [cleanPos, setCleanPos] = useState<{ top: number; left: number } | null>(null);
 
   // Toast notification
   const [toast, setToast] = useState<string | null>(null);
@@ -227,19 +221,17 @@ export default function EditorPage() {
 
   // Close popovers on outside click
   useEffect(() => {
-    if (!chunkOpen && !cleanOpen && !moreOpen) return;
+    if (!chunkOpen && !cleanOpen) return;
     const h = (e: MouseEvent) => {
       const t = e.target as Node;
       if (chunkOpen && !chunkBtnRef.current?.contains(t) && !chunkPanelRef.current?.contains(t))
         setChunkOpen(false);
-      if (cleanOpen && !cleanPanelRef.current?.contains(t))
+      if (cleanOpen && !cleanBtnRef.current?.contains(t) && !cleanPanelRef.current?.contains(t))
         setCleanOpen(false);
-      if (moreOpen && !moreBtnRef.current?.contains(t) && !morePanelRef.current?.contains(t))
-        setMoreOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, [chunkOpen, cleanOpen, moreOpen]);
+  }, [chunkOpen, cleanOpen]);
 
   // Auto-clear toast
   useEffect(() => {
@@ -530,12 +522,11 @@ export default function EditorPage() {
   return (
     <div className="flex flex-col" style={{ height: "100vh" }}>
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <header
-        className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-white/8"
-        style={{ background: "rgba(255,255,255,0.02)" }}
-      >
-        <div className="flex items-center gap-3 min-w-0">
+      {/* ── Header (two-row) ────────────────────────────────────────────────── */}
+      <header className="shrink-0 flex flex-col border-b border-white/8">
+
+        {/* ROW 1 — Navigation & Export */}
+        <div className="flex items-center gap-3 px-5 py-2.5" style={{ background: "rgba(255,255,255,0.02)" }}>
           <Link href="/dashboard"
             className="flex items-center gap-1.5 text-white/40 hover:text-white/80 transition-colors text-sm shrink-0">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -544,32 +535,53 @@ export default function EditorPage() {
             Back
           </Link>
           <span className="text-white/20 shrink-0">|</span>
-          <span className="text-white/70 text-sm font-medium truncate">{filename}</span>
+          <span className="text-white/70 text-sm font-medium truncate min-w-0">{filename}</span>
           <span className="text-xs text-white/30 bg-white/5 px-2 py-0.5 rounded-full border border-white/10 shrink-0">
             {segments.length} segments
           </span>
-          {scriptMode === "arabizi" ? (
-            <span className="text-xs px-2 py-0.5 rounded-full border shrink-0"
-              style={{ background: "rgba(147,51,234,0.2)", borderColor: "rgba(168,85,247,0.4)", color: "#d8b4fe" }}>
-              Arabizi
-            </span>
-          ) : (
-            <span className="text-xs px-2 py-0.5 rounded-full border shrink-0"
-              style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.35)" }}>
-              العربية
-            </span>
-          )}
+
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {/* Export Video */}
+            <button type="button" onClick={() => setVideoExportOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+              style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)" }}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.893L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              Export Video
+            </button>
+
+            {/* SRT */}
+            <button type="button" onClick={exportSrt}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all text-white/70 hover:text-white border border-white/10 hover:border-white/25"
+              style={{ background: "rgba(255,255,255,0.04)" }}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Export SRT
+            </button>
+
+            {/* VTT */}
+            <button type="button" onClick={exportVtt}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
+              style={{ background: "rgba(147,51,234,0.1)" }}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Export VTT
+            </button>
+          </div>
         </div>
 
-        {/* ── Right toolbar: 5 always-visible buttons + More ▾ ── */}
-        <div ref={toolbarRef} className="flex items-center gap-1.5 ml-3 shrink-0">
+        {/* ROW 2 — Tools */}
+        <div className="flex items-center gap-2 px-5 py-2" style={{ background: "rgba(0,0,0,0.18)" }}>
 
           {/* Chunk */}
           <button ref={chunkBtnRef} type="button"
             onClick={() => {
               const r = chunkBtnRef.current?.getBoundingClientRect();
               if (r) setChunkPos({ top: r.bottom + 8, right: window.innerWidth - r.right });
-              setChunkOpen((o) => !o); setCleanOpen(false); setMoreOpen(false);
+              setChunkOpen((o) => !o); setCleanOpen(false);
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
             style={{
@@ -581,17 +593,59 @@ export default function EditorPage() {
               <circle cx="6" cy="6" r="3" strokeWidth={2}/><circle cx="6" cy="18" r="3" strokeWidth={2}/>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/>
             </svg>
-            <span className="hidden sm:inline">Chunk</span>
+            Chunk
           </button>
 
-          {/* Export Video */}
-          <button type="button" onClick={() => setVideoExportOpen(true)}
+          {/* Clean */}
+          <button ref={cleanBtnRef} type="button"
+            onClick={() => {
+              const r = cleanBtnRef.current?.getBoundingClientRect();
+              if (r) setCleanPos({ top: r.bottom + 8, left: r.left });
+              setCleanOpen((o) => !o); setChunkOpen(false);
+              setCleanPreview(null);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            style={{
+              background: cleanOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
+              borderColor: cleanOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
+              color: cleanOpen ? "#d8b4fe" : "rgba(255,255,255,0.65)",
+            }}>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
+            </svg>
+            ✂️ Clean
+          </button>
+
+          {/* Script toggle */}
+          <button type="button" disabled={arabiziConverting}
+            onClick={() => { if (!arabiziConverting) toggleScript(); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            style={{
+              background: scriptMode === "arabizi" ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
+              borderColor: scriptMode === "arabizi" ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
+              color: scriptMode === "arabizi" ? "#d8b4fe" : "rgba(255,255,255,0.65)",
+              opacity: arabiziConverting ? 0.6 : 1,
+              cursor: arabiziConverting ? "not-allowed" : "pointer",
+            }}>
+            {arabiziConverting ? (
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <span className="font-bold" style={{ fontFamily: "serif" }}>ع/A</span>
+            )}
+            {arabiziConverting ? "Converting…" : scriptMode === "arabizi" ? "Arabic" : "Arabizi"}
+          </button>
+
+          {/* AI Captions */}
+          <button type="button" onClick={() => setCaptionsOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
             style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)" }}>
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.893L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
             </svg>
-            <span className="hidden sm:inline">Export Video</span>
+            AI Captions
           </button>
 
           {/* Style */}
@@ -605,46 +659,7 @@ export default function EditorPage() {
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
             </svg>
-            <span className="hidden sm:inline">Style</span>
-          </button>
-
-          {/* SRT */}
-          <button type="button" onClick={exportSrt}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all text-white/70 hover:text-white border border-white/10 hover:border-white/25"
-            style={{ background: "rgba(255,255,255,0.04)" }}>
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            <span className="hidden sm:inline">SRT</span>
-          </button>
-
-          {/* VTT */}
-          <button type="button" onClick={exportVtt}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
-            style={{ background: "rgba(147,51,234,0.1)" }}>
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            <span className="hidden sm:inline">VTT</span>
-          </button>
-
-          {/* More ▾ — Arabizi, AI Captions, Clean */}
-          <button ref={moreBtnRef} type="button"
-            onClick={() => {
-              const r = moreBtnRef.current?.getBoundingClientRect();
-              if (r) setMorePos({ top: r.bottom + 8, right: window.innerWidth - r.right });
-              setMoreOpen((o) => !o); setChunkOpen(false); setCleanOpen(false);
-            }}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
-            style={{
-              background: moreOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
-              borderColor: moreOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
-              color: moreOpen ? "#d8b4fe" : "rgba(255,255,255,0.65)",
-            }}>
-            More
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-            </svg>
+            Style
           </button>
         </div>
       </header>
@@ -785,64 +800,6 @@ export default function EditorPage() {
         )}
       </div>
 
-      {/* ── More ▾ dropdown (position:fixed) ───────────────────────────────── */}
-      {moreOpen && morePos && (
-        <div ref={morePanelRef}
-          className="rounded-xl border border-white/10 shadow-2xl overflow-hidden"
-          style={{ position: "fixed", top: morePos.top, right: morePos.right, zIndex: 9999, minWidth: "13rem",
-            background: "linear-gradient(160deg,#1c0b35 0%,#110620 100%)" }}>
-
-          {/* Arabizi toggle row */}
-          <button type="button" disabled={arabiziConverting}
-            onClick={() => { if (!arabiziConverting) { toggleScript(); setMoreOpen(false); } }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors hover:bg-white/5"
-            style={{
-              color: scriptMode === "arabizi" ? "#d8b4fe" : "rgba(255,255,255,0.75)",
-              opacity: arabiziConverting ? 0.6 : 1,
-              cursor: arabiziConverting ? "not-allowed" : "pointer",
-            }}>
-            {arabiziConverting ? (
-              <svg className="w-4 h-4 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-            ) : (
-              <span className="w-4 text-center font-bold shrink-0" style={{ fontFamily: "serif" }}>ع</span>
-            )}
-            <span>{arabiziConverting ? "Converting…" : scriptMode === "arabizi" ? "Switch to Arabic" : "Switch to Arabizi"}</span>
-          </button>
-
-          {/* AI Captions row */}
-          <button type="button"
-            onClick={() => { setCaptionsOpen(true); setMoreOpen(false); }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors hover:bg-white/5"
-            style={{ color: "rgba(255,255,255,0.75)" }}>
-            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-            </svg>
-            <span>AI Captions</span>
-          </button>
-
-          <div className="border-t mx-3 my-1" style={{ borderColor: "rgba(255,255,255,0.07)" }} />
-
-          {/* Clean row */}
-          <button type="button"
-            onClick={() => {
-              setMoreOpen(false);
-              if (morePos) setCleanPos({ top: morePos.top, right: morePos.right });
-              setCleanOpen(true);
-              setCleanPreview(null);
-            }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors hover:bg-white/5"
-            style={{ color: cleanOpen ? "#d8b4fe" : "rgba(255,255,255,0.75)" }}>
-            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
-            </svg>
-            <span>Clean (Remove Fillers)</span>
-          </button>
-        </div>
-      )}
-
       {/* ── Chunk popover (position:fixed — escapes all overflow contexts) ──── */}
       {chunkOpen && chunkPos && (
         <div ref={chunkPanelRef}
@@ -891,7 +848,7 @@ export default function EditorPage() {
       {cleanOpen && cleanPos && (
         <div ref={cleanPanelRef}
           className="rounded-xl border border-white/10 shadow-2xl p-4 w-80 max-h-[80vh] overflow-y-auto"
-          style={{ position: "fixed", top: cleanPos.top, right: cleanPos.right, zIndex: 9999,
+          style={{ position: "fixed", top: cleanPos.top, left: cleanPos.left, zIndex: 9999,
             background: "linear-gradient(160deg,#1c0b35 0%,#110620 100%)" }}>
           <p className="text-white/80 text-xs font-semibold mb-3">Remove Filler Words</p>
 
