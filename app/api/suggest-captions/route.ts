@@ -33,9 +33,9 @@ export async function POST(request: NextRequest) {
     }
 
     const platformNote = PLATFORM_NOTES[platform.toLowerCase()] ?? PLATFORM_NOTES.youtube;
-    const langNote     = language.toLowerCase() === "english"
-      ? "Write all suggestions in English."
-      : "Write all suggestions in the same language as the subtitle text.";
+    const langNote     = language.toLowerCase() === "subtitle"
+      ? "Write all suggestions in the same language as the subtitle text."
+      : `Write all suggestions in ${language}.`;
 
     const systemPrompt =
       `You are an expert social media strategist who helps content creators maximise reach and engagement.\n` +

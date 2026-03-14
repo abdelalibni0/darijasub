@@ -12,6 +12,7 @@ import {
   secondsToDuration,
   type EditorSegment,
 } from "@/lib/srt-parse";
+import { LANGUAGES, type Language } from "@/lib/languages";
 
 // ── SubStyle ───────────────────────────────────────────────────────────────────
 
@@ -831,6 +832,40 @@ function PosIcon({ position, active }: { position: string; active: boolean }) {
   );
 }
 
+// ── Language picker data (for CaptionsModal) ───────────────────────────────────
+
+const CAPTION_FLAGS: Record<string, string> = {
+  "darija-ma": "🇲🇦", "darija-dz": "🇩🇿", "tunisian_darija": "🇹🇳",
+  "arabic_egyptian": "🇪🇬", "arabic_levantine": "🇱🇧", "arabic_gulf": "🇸🇦", "msa": "🌍",
+  "en": "🇬🇧", "fr": "🇫🇷", "es": "🇪🇸", "de": "🇩🇪", "it": "🇮🇹",
+  "pt": "🇵🇹", "nl": "🇳🇱", "tr": "🇹🇷", "ru": "🇷🇺", "uk": "🇺🇦",
+  "pl": "🇵🇱", "ro": "🇷🇴", "hu": "🇭🇺", "cs": "🇨🇿", "sk": "🇸🇰",
+  "bg": "🇧🇬", "sr": "🇷🇸", "hr": "🇭🇷", "el": "🇬🇷", "fi": "🇫🇮",
+  "sv": "🇸🇪", "no": "🇳🇴", "da": "🇩🇰", "ja": "🇯🇵", "ko": "🇰🇷",
+  "zh": "🇨🇳", "zh-TW": "🇹🇼", "hi": "🇮🇳", "ur": "🇵🇰", "bn": "🇧🇩",
+  "id": "🇮🇩", "ms": "🇲🇾", "tl": "🇵🇭", "th": "🇹🇭", "vi": "🇻🇳",
+  "he": "🇮🇱", "fa": "🇮🇷", "ku": "🏳️", "sw": "🇰🇪", "ha": "🇳🇬", "am": "🇪🇹",
+};
+
+type CaptionLangGroup = "Arabic Dialects" | "Popular" | "Asian" | "Other";
+const CAP_ARABIC  = new Set(["darija-ma","darija-dz","tunisian_darija","arabic_egyptian","arabic_levantine","arabic_gulf","msa"]);
+const CAP_POPULAR = new Set(["en","fr","es","de","it","pt","nl","tr"]);
+const CAP_ASIAN   = new Set(["ja","ko","zh","zh-TW","hi","id","vi","th"]);
+function captionLangGroup(v: string): CaptionLangGroup {
+  if (CAP_ARABIC.has(v))  return "Arabic Dialects";
+  if (CAP_POPULAR.has(v)) return "Popular";
+  if (CAP_ASIAN.has(v))   return "Asian";
+  return "Other";
+}
+const CAPTION_GROUP_ORDER: CaptionLangGroup[] = ["Arabic Dialects", "Popular", "Asian", "Other"];
+const CAPTION_GROUP_ICONS: Record<CaptionLangGroup, string> = {
+  "Arabic Dialects": "🌙", "Popular": "⭐", "Asian": "🌏", "Other": "🌐",
+};
+const CAPTION_GROUPED = CAPTION_GROUP_ORDER.reduce<Record<CaptionLangGroup, Language[]>>(
+  (acc, g) => ({ ...acc, [g]: LANGUAGES.filter((l) => captionLangGroup(l.value) === g) }),
+  {} as Record<CaptionLangGroup, Language[]>
+);
+
 // ── CaptionsModal ──────────────────────────────────────────────────────────────
 
 interface CaptionSuggestions {
@@ -856,20 +891,47 @@ function CaptionsModal({
   segments: DisplaySegment[];
   onClose: () => void;
 }) {
-  const [platform, setPlatform]   = useState("youtube");
-  const [language, setLanguage]   = useState<"subtitle" | "english">("english");
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState<string | null>(null);
-  const [result, setResult]       = useState<CaptionSuggestions | null>(null);
-  const [copied, setCopied]       = useState<string | null>(null);
+  const [platform, setPlatform]               = useState("youtube");
+  const [captionLang, setCaptionLang]         = useState("en");
+  const [captionLangOpen, setCaptionLangOpen] = useState(false);
+  const [captionLangQuery, setCaptionLangQuery] = useState("");
+  const [loading, setLoading]                 = useState(false);
+  const [error, setError]                     = useState<string | null>(null);
+  const [result, setResult]                   = useState<CaptionSuggestions | null>(null);
+  const [copied, setCopied]                   = useState<string | null>(null);
 
-  // Close on backdrop click
-  const backdropRef = useRef<HTMLDivElement>(null);
+  const backdropRef        = useRef<HTMLDivElement>(null);
+  const captionLangRef     = useRef<HTMLDivElement>(null);
+  const captionLangSearchRef = useRef<HTMLInputElement>(null);
+
+  const selectedCaptionLang = LANGUAGES.find((l) => l.value === captionLang);
+  const filteredCaptionLangs = captionLangQuery.trim()
+    ? LANGUAGES.filter((l) =>
+        l.label.toLowerCase().includes(captionLangQuery.toLowerCase()) ||
+        l.promptName.toLowerCase().includes(captionLangQuery.toLowerCase())
+      )
+    : null;
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", h);
     return () => document.removeEventListener("keydown", h);
   }, [onClose]);
+
+  useEffect(() => {
+    if (!captionLangOpen) return;
+    const h = (e: MouseEvent) => {
+      if (captionLangRef.current && !captionLangRef.current.contains(e.target as Node)) {
+        setCaptionLangOpen(false);
+        setCaptionLangQuery("");
+      }
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [captionLangOpen]);
+
+  useEffect(() => {
+    if (captionLangOpen) setTimeout(() => captionLangSearchRef.current?.focus(), 30);
+  }, [captionLangOpen]);
 
   const handleGenerate = async () => {
     const subtitleText = segments.map((s) => s.text).join("\n");
@@ -881,7 +943,7 @@ function CaptionsModal({
       const res = await fetch("/api/suggest-captions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subtitleText, platform, language }),
+        body: JSON.stringify({ subtitleText, platform, language: selectedCaptionLang?.promptName ?? "English" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
@@ -952,18 +1014,96 @@ function CaptionsModal({
           {/* Language selector */}
           <div>
             <p className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2">Output language</p>
-            <div className="flex gap-2">
-              {([["english", "🇬🇧 English"], ["subtitle", "🔤 Same as subtitles"]] as const).map(([val, label]) => (
-                <button key={val} type="button" onClick={() => setLanguage(val)}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all"
-                  style={{
-                    background: language === val ? "rgba(147,51,234,0.35)" : "rgba(255,255,255,0.05)",
-                    border: language === val ? "1px solid rgba(168,85,247,0.55)" : "1px solid rgba(255,255,255,0.08)",
-                    color: language === val ? "#f3e8ff" : "rgba(255,255,255,0.55)",
-                  }}>
-                  {label}
-                </button>
-              ))}
+            <div ref={captionLangRef} className="relative">
+              {/* Trigger */}
+              <button
+                type="button"
+                onClick={() => setCaptionLangOpen((o) => !o)}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-all duration-200"
+                style={{
+                  background: "rgba(255,255,255,0.05)",
+                  borderColor: captionLangOpen ? "rgba(168,85,247,0.6)" : "rgba(255,255,255,0.15)",
+                }}
+              >
+                <span className="text-2xl leading-none">{CAPTION_FLAGS[captionLang] ?? "🌐"}</span>
+                <span className="flex-1 text-left text-white text-sm font-medium">
+                  {selectedCaptionLang?.label ?? "Select language"}
+                </span>
+                <svg
+                  className="w-4 h-4 text-white/40 shrink-0 transition-transform duration-200"
+                  style={{ transform: captionLangOpen ? "rotate(180deg)" : "rotate(0deg)" }}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {/* Dropdown */}
+              {captionLangOpen && (
+                <div
+                  className="absolute left-0 right-0 top-full mt-1 rounded-xl border border-white/10 shadow-2xl overflow-hidden"
+                  style={{ zIndex: 200, background: "linear-gradient(160deg, #1c0b35 0%, #130720 100%)" }}
+                >
+                  {/* Search */}
+                  <div className="p-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                    <div className="relative">
+                      <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30 pointer-events-none"
+                        fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                      <input
+                        ref={captionLangSearchRef}
+                        type="text"
+                        placeholder="Search languages..."
+                        value={captionLangQuery}
+                        onChange={(e) => setCaptionLangQuery(e.target.value)}
+                        className="w-full pl-8 pr-3 py-2 text-sm text-white placeholder-white/30 rounded-lg outline-none"
+                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* List */}
+                  <div className="overflow-y-auto" style={{ maxHeight: "220px" }}>
+                    {filteredCaptionLangs ? (
+                      filteredCaptionLangs.length === 0 ? (
+                        <p className="text-center text-white/30 text-sm py-6">No languages found</p>
+                      ) : (
+                        <div className="p-2 grid grid-cols-2 gap-1">
+                          {filteredCaptionLangs.map((lang) => (
+                            <CaptionLangOption key={lang.value} lang={lang} flag={CAPTION_FLAGS[lang.value] ?? "🌐"}
+                              selected={lang.value === captionLang}
+                              onSelect={(v) => { setCaptionLang(v); setCaptionLangOpen(false); setCaptionLangQuery(""); }} />
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      CAPTION_GROUP_ORDER.map((group) => {
+                        const langs = CAPTION_GROUPED[group];
+                        if (!langs.length) return null;
+                        return (
+                          <div key={group}>
+                            <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
+                              <span className="text-xs">{CAPTION_GROUP_ICONS[group]}</span>
+                              <span className="text-xs font-semibold uppercase tracking-wider"
+                                style={{ color: "rgba(255,255,255,0.35)" }}>
+                                {group}
+                              </span>
+                            </div>
+                            <div className="px-2 pb-1 grid grid-cols-2 gap-1">
+                              {langs.map((lang) => (
+                                <CaptionLangOption key={lang.value} lang={lang} flag={CAPTION_FLAGS[lang.value] ?? "🌐"}
+                                  selected={lang.value === captionLang}
+                                  onSelect={(v) => { setCaptionLang(v); setCaptionLangOpen(false); setCaptionLangQuery(""); }} />
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1025,6 +1165,45 @@ function CaptionsModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function CaptionLangOption({
+  lang, flag, selected, onSelect,
+}: {
+  lang: Language; flag: string; selected: boolean; onSelect: (v: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(lang.value)}
+      className="flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all duration-100 w-full"
+      style={{
+        background: selected ? "rgba(147,51,234,0.35)" : "transparent",
+        border:     selected ? "1px solid rgba(168,85,247,0.5)" : "1px solid transparent",
+        color:      selected ? "#fff" : "rgba(255,255,255,0.65)",
+      }}
+      onMouseEnter={(e) => {
+        if (!selected) {
+          (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.06)";
+          (e.currentTarget as HTMLButtonElement).style.color = "#fff";
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!selected) {
+          (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+          (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.65)";
+        }
+      }}
+    >
+      <span className="text-lg leading-none shrink-0">{flag}</span>
+      <span className="text-xs font-medium leading-tight">{lang.label}</span>
+      {selected && (
+        <svg className="w-3 h-3 ml-auto shrink-0 text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+        </svg>
+      )}
+    </button>
   );
 }
 
