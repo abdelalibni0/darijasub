@@ -113,9 +113,12 @@ export default function EditorPage() {
   const chunkPopoverRef = useRef<HTMLDivElement>(null);
 
   // Style panel
-  const [styleOpen, setStyleOpen]             = useState(false);
-  const [subStyle, setSubStyle]               = useState<SubStyle>(DEFAULT_STYLE);
+  const [styleOpen, setStyleOpen]               = useState(false);
+  const [subStyle, setSubStyle]                 = useState<SubStyle>(DEFAULT_STYLE);
   const [customFontLoaded, setCustomFontLoaded] = useState(false);
+
+  // AI Captions modal
+  const [captionsOpen, setCaptionsOpen] = useState(false);
 
   const audioRef       = useRef<HTMLAudioElement>(null);
   const segRefs        = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -386,6 +389,16 @@ export default function EditorPage() {
             )}
           </div>
 
+          {/* AI Captions button */}
+          <button type="button" onClick={() => setCaptionsOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)" }}>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            <span className="hidden sm:inline">AI Captions</span>
+          </button>
+
           {/* Style panel toggle */}
           <button type="button" onClick={() => setStyleOpen((o) => !o)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
@@ -487,6 +500,14 @@ export default function EditorPage() {
           />
         )}
       </div>
+
+      {/* ── AI Captions modal ──────────────────────────────────────────────── */}
+      {captionsOpen && (
+        <CaptionsModal
+          segments={segments}
+          onClose={() => setCaptionsOpen(false)}
+        />
+      )}
 
       {/* ── Audio player ───────────────────────────────────────────────────── */}
       <div className="shrink-0 px-5 py-3 border-t border-white/8" style={{ background: "rgba(8,4,18,0.97)" }}>
@@ -807,5 +828,240 @@ function PosIcon({ position, active }: { position: string; active: boolean }) {
           fill={r === row && c === col ? dotColor : "rgba(255,255,255,0.12)"} />
       )))}
     </svg>
+  );
+}
+
+// ── CaptionsModal ──────────────────────────────────────────────────────────────
+
+interface CaptionSuggestions {
+  title: string;
+  description: string;
+  hashtags: string[];
+  bestTimeToPost: string;
+  hookComment: string;
+}
+
+const PLATFORMS = [
+  { id: "youtube",   label: "YouTube",   emoji: "▶️" },
+  { id: "tiktok",    label: "TikTok",    emoji: "🎵" },
+  { id: "instagram", label: "Instagram", emoji: "📸" },
+  { id: "facebook",  label: "Facebook",  emoji: "👥" },
+  { id: "snapchat",  label: "Snapchat",  emoji: "👻" },
+];
+
+function CaptionsModal({
+  segments,
+  onClose,
+}: {
+  segments: DisplaySegment[];
+  onClose: () => void;
+}) {
+  const [platform, setPlatform]   = useState("youtube");
+  const [language, setLanguage]   = useState<"subtitle" | "english">("english");
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+  const [result, setResult]       = useState<CaptionSuggestions | null>(null);
+  const [copied, setCopied]       = useState<string | null>(null);
+
+  // Close on backdrop click
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  const handleGenerate = async () => {
+    const subtitleText = segments.map((s) => s.text).join("\n");
+    if (!subtitleText.trim()) { setError("No subtitle text to analyse."); return; }
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch("/api/suggest-captions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subtitleText, platform, language }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Request failed");
+      setResult(data as CaptionSuggestions);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copyText = (text: string, key: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
+  return (
+    <div
+      ref={backdropRef}
+      className="fixed inset-0 flex items-center justify-center p-4"
+      style={{ zIndex: 9999, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(6px)" }}
+      onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
+    >
+      <div
+        className="w-full max-w-lg flex flex-col rounded-2xl border border-white/10 shadow-2xl"
+        style={{ background: "linear-gradient(160deg,#1a0a2e 0%,#0f0518 100%)", maxHeight: "90vh" }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/8 shrink-0">
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            <span className="text-white font-semibold text-sm">AI Caption Suggestions</span>
+          </div>
+          <button type="button" onClick={onClose}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-white/30 hover:text-white/80 transition-colors">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
+
+          {/* Platform selector */}
+          <div>
+            <p className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2">Platform</p>
+            <div className="flex gap-2 flex-wrap">
+              {PLATFORMS.map((p) => (
+                <button key={p.id} type="button" onClick={() => setPlatform(p.id)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all"
+                  style={{
+                    background: platform === p.id ? "rgba(147,51,234,0.35)" : "rgba(255,255,255,0.05)",
+                    border: platform === p.id ? "1px solid rgba(168,85,247,0.55)" : "1px solid rgba(255,255,255,0.08)",
+                    color: platform === p.id ? "#f3e8ff" : "rgba(255,255,255,0.55)",
+                  }}>
+                  <span>{p.emoji}</span>
+                  <span>{p.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Language selector */}
+          <div>
+            <p className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2">Output language</p>
+            <div className="flex gap-2">
+              {([["english", "🇬🇧 English"], ["subtitle", "🔤 Same as subtitles"]] as const).map(([val, label]) => (
+                <button key={val} type="button" onClick={() => setLanguage(val)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all"
+                  style={{
+                    background: language === val ? "rgba(147,51,234,0.35)" : "rgba(255,255,255,0.05)",
+                    border: language === val ? "1px solid rgba(168,85,247,0.55)" : "1px solid rgba(255,255,255,0.08)",
+                    color: language === val ? "#f3e8ff" : "rgba(255,255,255,0.55)",
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Generate button */}
+          <button type="button" onClick={handleGenerate} disabled={loading}
+            className="w-full py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+            style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff", boxShadow: "0 4px 20px rgba(124,58,237,0.4)" }}>
+            {loading ? (
+              <>
+                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Generating…
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Generate
+              </>
+            )}
+          </button>
+
+          {/* Error */}
+          {error && (
+            <div className="rounded-xl px-4 py-3 text-sm text-red-300" style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)" }}>
+              {error}
+            </div>
+          )}
+
+          {/* Results */}
+          {result && (
+            <div className="space-y-3">
+              <ResultCard label="📌 Title" value={result.title} copyKey="title" copied={copied} onCopy={copyText} />
+              <ResultCard label="📝 Description" value={result.description} copyKey="description" copied={copied} onCopy={copyText} multiline />
+              <ResultCard
+                label="🏷️ Hashtags"
+                value={result.hashtags.join(" ")}
+                copyKey="hashtags"
+                copied={copied}
+                onCopy={copyText}
+                renderValue={
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {result.hashtags.map((tag) => (
+                      <span key={tag} className="text-xs px-2 py-0.5 rounded-full text-purple-300"
+                        style={{ background: "rgba(147,51,234,0.2)", border: "1px solid rgba(168,85,247,0.25)" }}>
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                }
+              />
+              <ResultCard label="🕐 Best time to post" value={result.bestTimeToPost} copyKey="time" copied={copied} onCopy={copyText} />
+              <ResultCard label="💬 First comment hook" value={result.hookComment} copyKey="hook" copied={copied} onCopy={copyText} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultCard({
+  label, value, copyKey, copied, onCopy, multiline, renderValue,
+}: {
+  label: string;
+  value: string;
+  copyKey: string;
+  copied: string | null;
+  onCopy: (text: string, key: string) => void;
+  multiline?: boolean;
+  renderValue?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl p-3.5" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}>
+      <div className="flex items-start justify-between gap-3">
+        <span className="text-white/50 text-xs font-semibold">{label}</span>
+        <button type="button" onClick={() => onCopy(value, copyKey)}
+          className="shrink-0 flex items-center gap-1 text-xs transition-all rounded-md px-2 py-0.5"
+          style={{
+            background: copied === copyKey ? "rgba(34,197,94,0.2)" : "rgba(255,255,255,0.06)",
+            color: copied === copyKey ? "#86efac" : "rgba(255,255,255,0.4)",
+            border: copied === copyKey ? "1px solid rgba(34,197,94,0.3)" : "1px solid rgba(255,255,255,0.1)",
+          }}>
+          {copied === copyKey ? (
+            <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg> Copied</>
+          ) : (
+            <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg> Copy</>
+          )}
+        </button>
+      </div>
+      {renderValue ?? (
+        <p className={`text-white/85 text-sm mt-1.5 leading-relaxed ${multiline ? "whitespace-pre-wrap" : ""}`}>
+          {value}
+        </p>
+      )}
+    </div>
   );
 }
