@@ -1440,12 +1440,6 @@ function VideoExportModal({
       return;
     }
 
-    const scale = QUALITY_SCALE[quality] ?? 1;
-    let outW = Math.round(plat.w * scale);
-    let outH = Math.round(plat.h * scale);
-    if (outW % 2 !== 0) outW--;
-    if (outH % 2 !== 0) outH--;
-
     setError(null);
     setProgress(0);
 
@@ -1483,12 +1477,15 @@ function VideoExportModal({
       setStatusText("Burning subtitles…");
       setProgress(50);
 
-      const assContent = generateASS(segments, style, outW, outH);
-
       const exportRes = await fetch("/api/export-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storagePath, assContent, platform, quality }),
+        body: JSON.stringify({
+          storagePath,
+          segments: segments.map(s => ({ start: s.startSeconds, end: s.endSeconds, text: s.text })),
+          platform,
+          quality,
+        }),
       });
 
       if (!exportRes.ok) {

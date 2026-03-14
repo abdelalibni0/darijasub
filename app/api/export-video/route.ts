@@ -9,7 +9,7 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-export const maxDuration = 300; // Vercel Pro — up to 5 minutes for ffmpeg encoding
+export const maxDuration = 300;
 
 const PLATFORMS: Record<string, { w: number; h: number }> = {
   youtube:          { w: 1920, h: 1080 },
@@ -18,153 +18,125 @@ const PLATFORMS: Record<string, { w: number; h: number }> = {
   instagram_square: { w: 1080, h: 1080 },
 };
 
-// Output dimensions per quality level
-const QUALITY_SCALE: Record<string, number> = { high: 720 / 1080, medium: 720 / 1080, fast: 480 / 1080 };
-const QUALITY_CRF:   Record<string, number> = { high: 23,          medium: 26,          fast: 28 };
-const QUALITY_PRESET: Record<string, string> = { high: "fast",     medium: "veryfast",  fast: "ultrafast" };
+const QUALITY_SCALE:  Record<string, number> = { high: 720 / 1080, medium: 720 / 1080, fast: 480 / 1080 };
+const QUALITY_CRF:    Record<string, number> = { high: 23,          medium: 26,          fast: 28 };
+const QUALITY_PRESET: Record<string, string> = { high: "fast",      medium: "veryfast",  fast: "ultrafast" };
+
+interface SubtitleInput {
+  start: number;
+  end:   number;
+  text:  string;
+}
+
+/** Escape text for ffmpeg drawtext filter */
+function escapeDrawtext(raw: string): string {
+  return raw
+    .replace(/\\/g, "\\\\") // \ → \\
+    .replace(/'/g,  "\\'")  // ' → \'
+    .replace(/:/g,  "\\:")  // : → \:
+    .replace(/%/g,  "\\%")  // % → \%
+    .replace(/\n/g, " ")    // newline → space
+    .trim();
+}
 
 /**
- * Patches the client-generated ASS content so it renders reliably on the server:
- *
- * 1. PlayRes → 640×360 (standard reference resolution; libass scales to output)
- * 2. Fontname → NotoSansArabic (only font guaranteed in /tmp)
- * 3. Fontsize → max(user value, 20) at PlayRes 640×360 — never tiny
- * 4. BorderStyle=1, Outline=2, Shadow=1 — black border + drop shadow so
- *    white text is readable on ANY background (light or dark)
+ * Build a chained drawtext filter from subtitle segments.
+ * Each subtitle is rendered only during its time window via enable='between(t,s,e)'.
  */
-function patchAss(assContent: string): string {
-  let patched = assContent;
-
-  // BUG 1 part A — normalise PlayRes so font size 20 is always readable
-  patched = patched
-    .replace(/^PlayResX:.*$/m, "PlayResX: 640")
-    .replace(/^PlayResY:.*$/m, "PlayResY: 360");
-
-  // Add PlayRes if entirely absent (safety net)
-  if (!/^PlayResX:/m.test(patched)) {
-    patched = patched.replace("[Script Info]", "[Script Info]\nPlayResX: 640\nPlayResY: 360");
-  }
-
-  // BUG 1 + 2 + 3 — patch the Style line
-  patched = patched.replace(/^(Style:[^\n]+)$/m, (line) => {
-    const parts = line.split(",");
-    // ASS Style CSV fields (0-indexed):
-    // 0:  "Style: Default"
-    // 1:  Fontname
-    // 2:  Fontsize
-    // 3:  PrimaryColour   4: SecondaryColour  5: OutlineColour  6: BackColour
-    // 7:  Bold  8: Italic  9: Underline  10: StrikeOut
-    // 11: ScaleX  12: ScaleY  13: Spacing  14: Angle
-    // 15: BorderStyle  16: Outline  17: Shadow
-    // 18: Alignment  19: MarginL  20: MarginR  21: MarginV  22: Encoding
-
-    // BUG 2 — font name
-    parts[1] = "NotoSansArabic";
-
-    // BUG 1 — minimum font size 20 (at PlayRes 640×360)
-    const currentSize = parseInt(parts[2], 10);
-    parts[2] = String(!isNaN(currentSize) && currentSize > 20 ? currentSize : 20);
-
-    // BUG 3 — outline + shadow so text is visible on any background
-    parts[15] = "1"; // BorderStyle: outline & shadow mode
-    parts[16] = "2"; // Outline width in pixels
-    parts[17] = "1"; // Shadow depth
-
-    return parts.join(",");
-  });
-
-  return patched;
+function buildDrawtextFilter(subs: SubtitleInput[], fontFile: string, fontSize: number): string {
+  return subs.map(sub => {
+    const text = escapeDrawtext(sub.text);
+    // Round to 3 decimal places to keep the filter string compact
+    const s = sub.start.toFixed(3);
+    const e = sub.end.toFixed(3);
+    return (
+      `drawtext=text='${text}'` +
+      `:fontfile=${fontFile}` +
+      `:fontsize=${fontSize}` +
+      `:fontcolor=white` +
+      `:x=(w-text_w)/2` +
+      `:y=h-80` +
+      `:box=1` +
+      `:boxcolor=black@0.6` +
+      `:boxborderw=8` +
+      `:enable='between(t,${s},${e})'`
+    );
+  }).join(",");
 }
 
 export async function POST(request: NextRequest) {
   const id         = randomUUID();
   const inputPath  = path.join("/tmp", `${id}-input`);
-  const assPath    = path.join("/tmp", `${id}-subs.ass`);
   const outputPath = path.join("/tmp", `${id}-output.mp4`);
   let storagePath: string | null = null;
 
   const cleanup = async () => {
     await Promise.all([
       unlink(inputPath).catch(() => {}),
-      unlink(assPath).catch(() => {}),
       unlink(outputPath).catch(() => {}),
     ]);
   };
 
   try {
     const body = await request.json();
-    storagePath              = body.storagePath as string;
-    const assContent: string = body.assContent;
-    const platform: string   = body.platform ?? "youtube";
-    const quality: string    = body.quality  ?? "medium";
+    storagePath                    = body.storagePath as string;
+    const segments: SubtitleInput[] = body.segments ?? [];
+    const platform: string          = body.platform ?? "youtube";
+    const quality: string           = body.quality  ?? "medium";
 
-    if (!storagePath || !assContent) {
-      return NextResponse.json({ error: "storagePath and assContent are required" }, { status: 400 });
+    if (!storagePath) {
+      return NextResponse.json({ error: "storagePath is required" }, { status: 400 });
+    }
+    if (!segments.length) {
+      return NextResponse.json({ error: "No subtitle segments provided" }, { status: 400 });
     }
 
-    // Validate ASS content has actual subtitle events
-    const dialogueLines = assContent.split("\n").filter((l) => l.startsWith("Dialogue:"));
-    console.log(`[/api/export-video] ASS received: ${assContent.length} chars, ${dialogueLines.length} dialogue events`);
-    if (dialogueLines.length === 0) {
-      return NextResponse.json({ error: "No subtitle content found — ASS file has no dialogue events" }, { status: 400 });
-    }
+    console.log(`[export-video] ${segments.length} segments, platform=${platform}, quality=${quality}`);
 
     // Compute output dimensions
-    const plat  = PLATFORMS[platform] ?? PLATFORMS.youtube;
-    const scale = QUALITY_SCALE[quality] ?? QUALITY_SCALE.medium;
+    const plat   = PLATFORMS[platform] ?? PLATFORMS.youtube;
+    const scale  = QUALITY_SCALE[quality]  ?? QUALITY_SCALE.medium;
+    const crf    = QUALITY_CRF[quality]    ?? QUALITY_CRF.medium;
+    const preset = QUALITY_PRESET[quality] ?? QUALITY_PRESET.medium;
     let outW = Math.round(plat.w * scale);
     let outH = Math.round(plat.h * scale);
     if (outW % 2 !== 0) outW--;
     if (outH % 2 !== 0) outH--;
-    const crf    = QUALITY_CRF[quality]    ?? QUALITY_CRF.medium;
-    const preset = QUALITY_PRESET[quality] ?? QUALITY_PRESET.medium;
 
     // Download source video from Supabase
     const admin = createAdminClient();
-    console.log(`[/api/export-video] Downloading storagePath="${storagePath}" from bucket="${EXPORT_BUCKET}"`);
+    console.log(`[export-video] Downloading storagePath="${storagePath}" from bucket="${EXPORT_BUCKET}"`);
     const { data: blob, error: dlErr } = await admin.storage
       .from(EXPORT_BUCKET)
       .download(storagePath);
     if (dlErr || !blob) {
-      console.error(`[/api/export-video] Download failed for path="${storagePath}":`, dlErr?.message);
+      console.error(`[export-video] Download failed for path="${storagePath}":`, dlErr?.message);
       throw new Error("Video file not found in storage. Please try re-uploading your video.");
     }
 
     const videoBuffer = Buffer.from(await blob.arrayBuffer());
-    console.log(`[/api/export-video] Video downloaded: ${videoBuffer.byteLength} bytes`);
+    console.log(`[export-video] Video downloaded: ${videoBuffer.byteLength} bytes`);
     await writeFile(inputPath, videoBuffer);
 
-    // BUG FIX: Copy NotoSansArabic into /tmp — /tmp is always writable on Vercel,
-    // unlike process.cwd()/public/fonts which may not be on the Lambda filesystem.
+    // Copy NotoSansArabic into /tmp — always writable on Vercel
     const srcFont = path.join(process.cwd(), "public", "fonts", "NotoSansArabic.ttf");
     const tmpFont = "/tmp/NotoSansArabic.ttf";
     if (!existsSync(tmpFont)) {
       await copyFile(srcFont, tmpFont);
     }
-    console.log("[export-video] font copied to /tmp:", existsSync(tmpFont));
+    console.log("[export-video] font in /tmp:", existsSync(tmpFont));
 
-    // Patch ASS: fix PlayRes, font name, font size, outline, shadow
-    const assPatched = patchAss(assContent);
-    const styleLineString = assPatched.split("\n").find(l => l.startsWith("Style:")) ?? "(not found)";
-    console.log("[export-video] ASS Style line:", styleLineString);
-    console.log("[export-video] ASS first Dialogue:", assPatched.split("\n").find(l => l.startsWith("Dialogue:")) ?? "(none)");
-    // Log full ASS content for deep diagnosis
-    console.log("[export-video] FULL ASS CONTENT:\n" + assPatched);
+    // Build drawtext filter (same approach confirmed working by test-export)
+    const fontSize      = Math.max(24, Math.round(outH * 0.055));
+    const drawtextChain = buildDrawtextFilter(segments, tmpFont, fontSize);
 
-    await writeFile(assPath, assPatched, "utf8");
-    const { size: assFileSize } = await import("fs/promises").then(({ stat }) => stat(assPath));
-    console.log(`[/api/export-video] ASS written to ${assPath}: ${assFileSize} bytes`);
-
-    // Use subtitles= filter (behaves differently to ass= on some ffmpeg builds)
-    // fontsdir=/tmp — NotoSansArabic.ttf is there
-    const assArg = `${assPath}:fontsdir=/tmp`;
     const vf =
       `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,` +
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
-      `subtitles=${assArg}`;
+      drawtextChain;
 
-    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} preset=${preset} platform=${platform}`);
-    console.log(`[/api/export-video] vf: ${vf}`);
+    console.log("[export-video] drawtext filter:", vf.substring(0, 500));
+    console.log(`[export-video] Running ffmpeg: ${outW}x${outH} fontsize=${fontSize} crf=${crf} preset=${preset}`);
 
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
@@ -181,10 +153,10 @@ export async function POST(request: NextRequest) {
         ])
         .output(outputPath)
         .on("stderr", (line) => console.log("[ffmpeg stderr]", line))
-        .on("end", () => { console.log("[/api/export-video] ffmpeg done"); resolve(); })
+        .on("end", () => { console.log("[export-video] ffmpeg done"); resolve(); })
         .on("error", (err, _stdout, stderr) => {
-          console.error("[/api/export-video] ffmpeg error:", err.message);
-          console.error("[/api/export-video] stderr:", stderr);
+          console.error("[export-video] ffmpeg error:", err.message);
+          console.error("[export-video] stderr:", stderr);
           reject(new Error(`ffmpeg: ${err.message}`));
         })
         .run();
@@ -210,7 +182,7 @@ export async function POST(request: NextRequest) {
       const admin = createAdminClient();
       await admin.storage.from(EXPORT_BUCKET).remove([storagePath]).catch(() => {});
     }
-    console.error("[/api/export-video]", err);
+    console.error("[export-video]", err);
     const message = err instanceof Error ? err.message : "Export failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
