@@ -122,8 +122,9 @@ export default function EditorPage() {
   const [captionsOpen, setCaptionsOpen] = useState(false);
 
   // Video export modal
-  const [videoExportOpen, setVideoExportOpen] = useState(false);
-  const [rawFilename, setRawFilename]         = useState<string | null>(null);
+  const [videoExportOpen, setVideoExportOpen]     = useState(false);
+  const [rawFilename, setRawFilename]             = useState<string | null>(null);
+  const [videoStoragePath, setVideoStoragePath]   = useState<string | null>(null);
 
   const audioRef       = useRef<HTMLAudioElement>(null);
   const segRefs        = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -145,6 +146,8 @@ export default function EditorPage() {
         setFilename(data.filename.replace(/\.[^/.]+$/, ""));
         setRawFilename(data.filename);
       }
+      const vsp = localStorage.getItem("darijasub_video_url");
+      if (vsp) setVideoStoragePath(vsp);
     } catch {
       setNotFound(true);
     }
@@ -534,6 +537,7 @@ export default function EditorPage() {
           style={subStyle}
           audioUrl={audioUrl}
           rawFilename={rawFilename}
+          videoStoragePath={videoStoragePath}
           onClose={() => setVideoExportOpen(false)}
         />
       )}
@@ -1360,12 +1364,14 @@ function VideoExportModal({
   style,
   audioUrl,
   rawFilename,
+  videoStoragePath,
   onClose,
 }: {
   segments: DisplaySegment[];
   style: SubStyle;
   audioUrl: string | null;
   rawFilename: string | null;
+  videoStoragePath: string | null;
   onClose: () => void;
 }) {
   const [platform, setPlatform] = useState("youtube");
@@ -1391,7 +1397,10 @@ function VideoExportModal({
   }, [onClose, busy]);
 
   const handleExport = async () => {
-    if (!audioUrl) { setError("No video source available."); return; }
+    if (!videoStoragePath && !audioUrl) {
+      setError("No video source available.");
+      return;
+    }
 
     const scale = QUALITY_SCALE[quality] ?? 1;
     let outW = Math.round(plat.w * scale);
@@ -1403,44 +1412,43 @@ function VideoExportModal({
     setProgress(0);
 
     try {
-      // ── 1. Fetch source video ────────────────────────────────────────────
-      setPhase("uploading");
-      setStatusText("Fetching video…");
-      setProgress(5);
+      let storagePath = videoStoragePath;
 
-      const videoBlob = await fetch(audioUrl).then(r => r.blob());
-      const filename  = rawFilename ?? "video.mp4";
+      if (!storagePath) {
+        // ── Fallback: upload blob URL to export-uploads ──────────────────
+        setPhase("uploading");
+        setStatusText("Uploading video…");
+        setProgress(5);
 
-      // ── 2. Get signed upload URL ─────────────────────────────────────────
-      setStatusText("Preparing upload…");
-      setProgress(10);
+        const videoBlob = await fetch(audioUrl!).then(r => r.blob());
+        const filename  = rawFilename ?? "video.mp4";
 
-      const urlRes = await fetch("/api/upload-export-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, mimeType: videoBlob.type }),
-      });
-      if (!urlRes.ok) {
-        const e = await urlRes.json().catch(() => ({}));
-        throw new Error(e.error ?? "Failed to get upload URL");
+        const urlRes = await fetch("/api/upload-export-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename, mimeType: videoBlob.type }),
+        });
+        if (!urlRes.ok) {
+          const e = await urlRes.json().catch(() => ({}));
+          throw new Error(e.error ?? "Failed to get upload URL");
+        }
+        const { signedUrl, storagePath: newPath } = await urlRes.json();
+
+        const uploadRes = await fetch(signedUrl, {
+          method: "PUT",
+          headers: { "Content-Type": videoBlob.type || "application/octet-stream" },
+          body: videoBlob,
+        });
+        if (!uploadRes.ok) throw new Error("Failed to upload video to storage");
+
+        storagePath = newPath;
+        setProgress(40);
       }
-      const { signedUrl, storagePath } = await urlRes.json();
 
-      // ── 3. Upload to Supabase ────────────────────────────────────────────
-      setStatusText("Uploading video…");
-      setProgress(15);
-
-      const uploadRes = await fetch(signedUrl, {
-        method: "PUT",
-        headers: { "Content-Type": videoBlob.type || "application/octet-stream" },
-        body: videoBlob,
-      });
-      if (!uploadRes.ok) throw new Error("Failed to upload video to storage");
-
-      // ── 4. Process on server ─────────────────────────────────────────────
+      // ── Process on server ────────────────────────────────────────────────
       setPhase("processing");
       setStatusText("Burning subtitles…");
-      setProgress(50);
+      setProgress(videoStoragePath ? 10 : 50);
 
       const assContent = generateASS(segments, style, outW, outH);
 
@@ -1455,16 +1463,17 @@ function VideoExportModal({
         throw new Error(e.error ?? "Server export failed");
       }
 
-      // ── 5. Download result ───────────────────────────────────────────────
+      // ── Download result ──────────────────────────────────────────────────
       setStatusText("Preparing download…");
       setProgress(97);
 
       const outBlob = await exportRes.blob();
       const dlUrl   = URL.createObjectURL(outBlob);
+      const dlName  = `${(rawFilename ?? "video").replace(/\.[^/.]+$/, "")}_${platform}_${quality}.mp4`;
 
       const a = document.createElement("a");
       a.href = dlUrl;
-      a.download = `${filename.replace(/\.[^/.]+$/, "")}_${platform}_${quality}.mp4`;
+      a.download = dlName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
