@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, EXPORT_BUCKET } from "@/lib/supabase/admin";
-import { writeFile, readFile, unlink } from "fs/promises";
+import { writeFile, readFile, unlink, copyFile } from "fs/promises";
+import { existsSync } from "fs";
 import { randomUUID } from "crypto";
 import path from "path";
 import ffmpeg from "fluent-ffmpeg";
@@ -20,6 +21,59 @@ const PLATFORMS: Record<string, { w: number; h: number }> = {
 const QUALITY_SCALE: Record<string, number> = { high: 1, medium: 720 / 1080, fast: 480 / 1080 };
 const QUALITY_CRF:   Record<string, number> = { high: 18, medium: 23, fast: 28 };
 
+/**
+ * Patches the client-generated ASS content so it renders reliably on the server:
+ *
+ * 1. PlayRes → 640×360 (standard reference resolution; libass scales to output)
+ * 2. Fontname → NotoSansArabic (only font guaranteed in /tmp)
+ * 3. Fontsize → max(user value, 20) at PlayRes 640×360 — never tiny
+ * 4. BorderStyle=1, Outline=2, Shadow=1 — black border + drop shadow so
+ *    white text is readable on ANY background (light or dark)
+ */
+function patchAss(assContent: string): string {
+  let patched = assContent;
+
+  // BUG 1 part A — normalise PlayRes so font size 20 is always readable
+  patched = patched
+    .replace(/^PlayResX:.*$/m, "PlayResX: 640")
+    .replace(/^PlayResY:.*$/m, "PlayResY: 360");
+
+  // Add PlayRes if entirely absent (safety net)
+  if (!/^PlayResX:/m.test(patched)) {
+    patched = patched.replace("[Script Info]", "[Script Info]\nPlayResX: 640\nPlayResY: 360");
+  }
+
+  // BUG 1 + 2 + 3 — patch the Style line
+  patched = patched.replace(/^(Style:[^\n]+)$/m, (line) => {
+    const parts = line.split(",");
+    // ASS Style CSV fields (0-indexed):
+    // 0:  "Style: Default"
+    // 1:  Fontname
+    // 2:  Fontsize
+    // 3:  PrimaryColour   4: SecondaryColour  5: OutlineColour  6: BackColour
+    // 7:  Bold  8: Italic  9: Underline  10: StrikeOut
+    // 11: ScaleX  12: ScaleY  13: Spacing  14: Angle
+    // 15: BorderStyle  16: Outline  17: Shadow
+    // 18: Alignment  19: MarginL  20: MarginR  21: MarginV  22: Encoding
+
+    // BUG 2 — font name
+    parts[1] = "NotoSansArabic";
+
+    // BUG 1 — minimum font size 20 (at PlayRes 640×360)
+    const currentSize = parseInt(parts[2], 10);
+    parts[2] = String(!isNaN(currentSize) && currentSize > 20 ? currentSize : 20);
+
+    // BUG 3 — outline + shadow so text is visible on any background
+    parts[15] = "1"; // BorderStyle: outline & shadow mode
+    parts[16] = "2"; // Outline width in pixels
+    parts[17] = "1"; // Shadow depth
+
+    return parts.join(",");
+  });
+
+  return patched;
+}
+
 export async function POST(request: NextRequest) {
   const id         = randomUUID();
   const inputPath  = path.join("/tmp", `${id}-input`);
@@ -37,7 +91,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    storagePath             = body.storagePath as string;
+    storagePath              = body.storagePath as string;
     const assContent: string = body.assContent;
     const platform: string   = body.platform ?? "youtube";
     const quality: string    = body.quality  ?? "medium";
@@ -77,40 +131,44 @@ export async function POST(request: NextRequest) {
     console.log(`[/api/export-video] Video downloaded: ${videoBuffer.byteLength} bytes`);
     await writeFile(inputPath, videoBuffer);
 
-    // Force NotoSansArabic for every style — it covers Arabic + Latin + all
-    // supported languages, and is the only font guaranteed on the server.
-    const assPatched = assContent.replace(
-      /^(Style:\s+[^,]+),([^,]+),/m,
-      "$1,NotoSansArabic,"
-    );
-    console.log(`[/api/export-video] ASS font patched; first dialogue: ${
-      assPatched.split("\n").find(l => l.startsWith("Dialogue:")) ?? "(none)"
-    }`);
+    // BUG FIX: Copy NotoSansArabic into /tmp — /tmp is always writable on Vercel,
+    // unlike process.cwd()/public/fonts which may not be on the Lambda filesystem.
+    const srcFont = path.join(process.cwd(), "public", "fonts", "NotoSansArabic.ttf");
+    const tmpFont = "/tmp/NotoSansArabic.ttf";
+    if (!existsSync(tmpFont)) {
+      await copyFile(srcFont, tmpFont);
+    }
+    console.log("[export-video] font copied to /tmp:", existsSync(tmpFont));
+
+    // Patch ASS: fix PlayRes, font name, font size, outline, shadow
+    const assPatched = patchAss(assContent);
+    const styleLineString = assPatched.split("\n").find(l => l.startsWith("Style:")) ?? "(not found)";
+    console.log("[export-video] ASS Style line:", styleLineString);
+    console.log("[export-video] ASS first Dialogue:", assPatched.split("\n").find(l => l.startsWith("Dialogue:")) ?? "(none)");
 
     await writeFile(assPath, assPatched, "utf8");
     const { size: assFileSize } = await import("fs/promises").then(({ stat }) => stat(assPath));
     console.log(`[/api/export-video] ASS written to ${assPath}: ${assFileSize} bytes`);
 
-    // Fonts dir — bundled inside the Next.js project's public/fonts/
-    const fontsDir = path.join(process.cwd(), "public", "fonts");
-
-    // Build video filter with explicit fontsdir so ffmpeg finds NotoSansArabic
-    const assArg = `${assPath.replace(/\\/g, "/")}:fontsdir=${fontsDir.replace(/\\/g, "/")}`;
+    // fontsdir=/tmp — NotoSansArabic.ttf is now there
+    const assArg = `${assPath}:fontsdir=/tmp`;
     const vf =
       `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,` +
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
       `ass=${assArg}`;
 
-    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} platform=${platform} fontsdir=${fontsDir}`);
+    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} platform=${platform}`);
+    console.log(`[/api/export-video] vf: ${vf}`);
+
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
         .outputOptions([
-          "-vf",     vf,
-          "-c:v",    "libx264",
-          "-crf",    String(crf),
-          "-preset", "ultrafast",
-          "-c:a",    "aac",
-          "-b:a",    "128k",
+          "-vf",       vf,
+          "-c:v",      "libx264",
+          "-crf",      String(crf),
+          "-preset",   "ultrafast",
+          "-c:a",      "aac",
+          "-b:a",      "128k",
           "-movflags", "+faststart",
         ])
         .output(outputPath)
@@ -139,7 +197,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     await cleanup();
-    // Best-effort cleanup of Supabase file
     if (storagePath) {
       const admin = createAdminClient();
       await admin.storage.from(EXPORT_BUCKET).remove([storagePath]).catch(() => {});
