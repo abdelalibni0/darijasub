@@ -9,7 +9,7 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-export const maxDuration = 60;
+export const maxDuration = 300; // Vercel Pro — up to 5 minutes for ffmpeg encoding
 
 const PLATFORMS: Record<string, { w: number; h: number }> = {
   youtube:          { w: 1920, h: 1080 },
@@ -18,8 +18,10 @@ const PLATFORMS: Record<string, { w: number; h: number }> = {
   instagram_square: { w: 1080, h: 1080 },
 };
 
-const QUALITY_SCALE: Record<string, number> = { high: 1, medium: 720 / 1080, fast: 480 / 1080 };
-const QUALITY_CRF:   Record<string, number> = { high: 18, medium: 23, fast: 28 };
+// Output dimensions per quality level
+const QUALITY_SCALE: Record<string, number> = { high: 720 / 1080, medium: 720 / 1080, fast: 480 / 1080 };
+const QUALITY_CRF:   Record<string, number> = { high: 23,          medium: 26,          fast: 28 };
+const QUALITY_PRESET: Record<string, string> = { high: "fast",     medium: "veryfast",  fast: "ultrafast" };
 
 /**
  * Patches the client-generated ASS content so it renders reliably on the server:
@@ -114,7 +116,8 @@ export async function POST(request: NextRequest) {
     let outH = Math.round(plat.h * scale);
     if (outW % 2 !== 0) outW--;
     if (outH % 2 !== 0) outH--;
-    const crf = QUALITY_CRF[quality] ?? QUALITY_CRF.medium;
+    const crf    = QUALITY_CRF[quality]    ?? QUALITY_CRF.medium;
+    const preset = QUALITY_PRESET[quality] ?? QUALITY_PRESET.medium;
 
     // Download source video from Supabase
     const admin = createAdminClient();
@@ -157,7 +160,7 @@ export async function POST(request: NextRequest) {
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
       `ass=${assArg}`;
 
-    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} platform=${platform}`);
+    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} preset=${preset} platform=${platform}`);
     console.log(`[/api/export-video] vf: ${vf}`);
 
     await new Promise<void>((resolve, reject) => {
@@ -166,7 +169,9 @@ export async function POST(request: NextRequest) {
           "-vf",       vf,
           "-c:v",      "libx264",
           "-crf",      String(crf),
-          "-preset",   "ultrafast",
+          "-preset",   preset,
+          "-tune",     "fastdecode",
+          "-threads",  "0",
           "-c:a",      "aac",
           "-b:a",      "128k",
           "-movflags", "+faststart",
