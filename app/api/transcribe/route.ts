@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
       model: "whisper-1",
       response_format: "verbose_json",
       timestamp_granularities: ["segment"],
-    } as Parameters<typeof openai.audio.transcriptions.create>[0]);
+    });
 
     await cleanupTempFiles();
 
