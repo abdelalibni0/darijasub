@@ -28,6 +28,33 @@ interface SubtitleInput {
   text:  string;
 }
 
+interface SubtitleStyle {
+  fontColor:         string;  // hex e.g. "#FFD700"
+  backgroundColor:   string;  // hex e.g. "#1a1a1a"
+  backgroundOpacity: number;  // 0–1
+  outlineColor:      string;  // hex
+  outlineWidth:      number;  // px
+  fontFamily:        string;
+  fontSize:          number;  // px at 1080p reference
+  position:          string;  // e.g. "bottom-center"
+}
+
+const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
+  fontColor:         "#ffffff",
+  backgroundColor:   "#000000",
+  backgroundOpacity: 0.6,
+  outlineColor:      "#000000",
+  outlineWidth:      0,
+  fontFamily:        "Inter",
+  fontSize:          24,
+  position:          "bottom-center",
+};
+
+/** Convert a CSS hex color (#RRGGBB) to ffmpeg format (0xRRGGBB). */
+function hexToFfmpeg(hex: string): string {
+  return "0x" + hex.replace(/^#/, "").toUpperCase();
+}
+
 /**
  * Escape text for ffmpeg drawtext filter.
  * Order matters — backslash must be first to avoid double-escaping.
@@ -46,26 +73,60 @@ function escapeDrawtext(raw: string): string {
 }
 
 /**
- * Build a chained drawtext filter from subtitle segments.
+ * Build a chained drawtext filter from subtitle segments, applying the full style.
  * Each subtitle is rendered only during its time window via enable='between(t,s,e)'.
  */
-function buildDrawtextFilter(subs: SubtitleInput[], fontFile: string, fontSize: number): string {
+function buildDrawtextFilter(
+  subs:     SubtitleInput[],
+  fontFile: string,
+  outH:     number,
+  style:    SubtitleStyle,
+): string {
+  // Scale fontSize proportionally to output height (reference: 500px → looks natural at most resolutions)
+  const fontSize = Math.max(16, Math.round(style.fontSize * (outH / 500)));
+
+  // Y position based on the position string prefix
+  let yPos: string;
+  if (style.position.startsWith("top"))    yPos = "80";
+  else if (style.position.startsWith("middle")) yPos = "(h-text_h)/2";
+  else                                      yPos = "h-80";   // bottom (default)
+
+  // X position based on the position string suffix
+  let xPos: string;
+  if (style.position.endsWith("left"))     xPos = "20";
+  else if (style.position.endsWith("right")) xPos = "w-text_w-20";
+  else                                      xPos = "(w-text_w)/2"; // center (default)
+
+  const fontColor   = hexToFfmpeg(style.fontColor);
+  const hasBox      = style.backgroundOpacity > 0;
+  const boxColor    = hasBox
+    ? `${hexToFfmpeg(style.backgroundColor)}@${style.backgroundOpacity.toFixed(2)}`
+    : "black@0";
+  const borderW     = Math.round(style.outlineWidth);
+  const borderColor = hexToFfmpeg(style.outlineColor);
+
   return subs.map(sub => {
     const text = escapeDrawtext(sub.text);
     const s    = sub.start.toFixed(3);
     const e    = sub.end.toFixed(3);
-    return (
+
+    let f =
       `drawtext=text='${text}'` +
       `:fontfile=${fontFile}` +
       `:fontsize=${fontSize}` +
-      `:fontcolor=white` +
-      `:x=(w-text_w)/2` +
-      `:y=h-80` +
-      `:box=1` +
-      `:boxcolor=black@0.6` +
-      `:boxborderw=8` +
-      `:enable='between(t,${s},${e})'`
-    );
+      `:fontcolor=${fontColor}` +
+      `:x=${xPos}` +
+      `:y=${yPos}` +
+      `:box=${hasBox ? 1 : 0}` +
+      `:boxcolor=${boxColor}` +
+      `:boxborderw=${hasBox ? 8 : 0}`;
+
+    if (borderW > 0) {
+      f += `:borderw=${borderW}:bordercolor=${borderColor}`;
+    }
+
+    f += `:enable='between(t,${s},${e})'`;
+    return f;
   }).join(",");
 }
 
@@ -88,6 +149,7 @@ export async function POST(request: NextRequest) {
     const segments: SubtitleInput[] = body.segments ?? [];
     const platform: string          = body.platform ?? "youtube";
     const quality: string           = body.quality  ?? "medium";
+    const style: SubtitleStyle      = { ...DEFAULT_SUBTITLE_STYLE, ...(body.style ?? {}) };
 
     if (!storagePath) {
       return NextResponse.json({ error: "storagePath is required" }, { status: 400 });
@@ -131,12 +193,10 @@ export async function POST(request: NextRequest) {
     }
     console.log("[export-video] font in /tmp:", existsSync(tmpFont));
 
-    // Build drawtext filter (same approach confirmed working by test-export)
-    const fontSize = Math.max(24, Math.round(outH * 0.055));
-
+    // Build drawtext filter applying the full subtitle style
     let drawtextChain: string;
     try {
-      drawtextChain = buildDrawtextFilter(segments, tmpFont, fontSize);
+      drawtextChain = buildDrawtextFilter(segments, tmpFont, outH, style);
     } catch (buildErr) {
       console.error("[export-video] drawtext build error:", buildErr);
       throw new Error(`Failed to build subtitle filter: ${buildErr instanceof Error ? buildErr.message : buildErr}`);
@@ -148,7 +208,7 @@ export async function POST(request: NextRequest) {
       drawtextChain;
 
     console.log("[export-video] drawtext sample:", drawtextChain.substring(0, 300));
-    console.log(`[export-video] Running ffmpeg: ${outW}x${outH} fontsize=${fontSize} crf=${crf} preset=${preset}`);
+    console.log(`[export-video] Running ffmpeg: ${outW}x${outH} style.fontSize=${style.fontSize} crf=${crf} preset=${preset}`);
 
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)

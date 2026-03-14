@@ -1804,6 +1804,16 @@ function VideoExportModal({
           segments: segments.map(s => ({ start: s.startSeconds, end: s.endSeconds, text: s.text })),
           platform,
           quality,
+          style: {
+            fontColor:         style.textColor,
+            backgroundColor:   style.bgColor,
+            backgroundOpacity: style.bgOpacity / 100,
+            outlineColor:      style.strokeColor,
+            outlineWidth:      style.strokeWidth,
+            fontFamily:        style.fontFamily,
+            fontSize:          style.fontSize,
+            position:          style.position,
+          },
         }),
       });
 
