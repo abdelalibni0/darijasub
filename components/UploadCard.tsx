@@ -213,9 +213,15 @@ export default function UploadCard() {
       setCompressProgress(0);
 
       if (!ffmpegRef.current) {
-        const { FFmpeg }   = await import("@ffmpeg/ffmpeg");
+        const { FFmpeg }    = await import("@ffmpeg/ffmpeg");
         const { toBlobURL } = await import("@ffmpeg/util");
         const ffmpeg = new FFmpeg();
+
+        // Log FFmpeg output to console for debugging
+        ffmpeg.on("log", ({ message }: { message: string }) => {
+          console.log("[FFmpeg]", message);
+        });
+
         await ffmpeg.load({
           coreURL: await toBlobURL(`${FFMPEG_CDN}/ffmpeg-core.js`,   "text/javascript"),
           wasmURL: await toBlobURL(`${FFMPEG_CDN}/ffmpeg-core.wasm`, "application/wasm"),
@@ -228,34 +234,37 @@ export default function UploadCard() {
 
       const { fetchFile } = await import("@ffmpeg/util");
 
-      const ext    = f.name.match(/\.[^/.]+$/)?.[0] ?? "";
-      const inName = `input${ext}`;
-      const outName = isAudio ? "output.mp3" : "output.mp4";
+      const ext     = f.name.match(/\.[^/.]+$/)?.[0] ?? ".mp4";
+      const inName  = `input${ext}`;
+      const outName = "output.mp3"; // always extract to mp3 — Whisper only needs audio
 
       const progressHandler = ({ progress: p }: { progress: number }) => {
         if (Number.isFinite(p) && p >= 0) setCompressProgress(Math.round(p * 100));
       };
       ffmpeg.on("progress", progressHandler);
 
+      console.log(`[FFmpeg] Writing ${f.name} (${formatBytes(f.size)}) to FS…`);
       await ffmpeg.writeFile(inName, await fetchFile(f));
 
       if (isAudio) {
+        // Audio file: re-encode to 128kbps mp3
+        console.log("[FFmpeg] Re-encoding audio to 128kbps mp3…");
         await ffmpeg.exec([
           "-i", inName,
+          "-vn",
           "-c:a", "libmp3lame",
           "-b:a", "128k",
           "-map_metadata", "-1",
           outName,
         ]);
       } else {
+        // Video file: strip video, extract audio only — much faster & Whisper doesn't need video
+        console.log("[FFmpeg] Extracting audio track from video…");
         await ffmpeg.exec([
           "-i", inName,
-          "-c:v", "libx264",
-          "-crf", "28",
-          "-preset", "ultrafast",
-          "-c:a", "aac",
-          "-b:a", "64k",
-          "-map_metadata", "-1",
+          "-vn",
+          "-acodec", "libmp3lame",
+          "-b:a", "128k",
           outName,
         ]);
       }
@@ -266,26 +275,28 @@ export default function UploadCard() {
       const ab   = new ArrayBuffer(data.byteLength);
       new Uint8Array(ab).set(data);
 
-      const mimeType     = isAudio ? "audio/mpeg" : "video/mp4";
-      const outFilename  = f.name.replace(/\.[^/.]+$/, isAudio ? ".mp3" : ".mp4");
-      const compressed   = new File([ab], outFilename, { type: mimeType });
+      const outFilename = f.name.replace(/\.[^/.]+$/, ".mp3");
+      const extracted   = new File([ab], outFilename, { type: "audio/mpeg" });
+
+      console.log(`[FFmpeg] Done: ${formatBytes(f.size)} → ${formatBytes(extracted.size)}`);
 
       for (const name of [inName, outName]) {
         try { await ffmpeg.deleteFile(name); } catch { /* ignore */ }
       }
 
       setCompressInfo({
-        origMb:  (f.size           / 1024 / 1024).toFixed(1),
-        finalMb: (compressed.size  / 1024 / 1024).toFixed(1),
+        origMb:  (f.size          / 1024 / 1024).toFixed(1),
+        finalMb: (extracted.size  / 1024 / 1024).toFixed(1),
       });
       setCompressProgress(100);
       setCompressState("done");
-      setFile(compressed);
+      setFile(extracted);
 
-    } catch {
-      // Compression failed — show a normal error
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[FFmpeg] compression failed:", msg);
       setCompressState("idle");
-      setError(`File is ${formatBytes(f.size)} — auto-compression failed. Please trim the file to under 25 MB and try again.`);
+      setError(`Auto-extraction failed: ${msg}. Please trim the file to under 25 MB and try again.`);
       setStatus("error");
     }
   };
@@ -468,7 +479,7 @@ export default function UploadCard() {
             <p className="font-semibold text-white">{originalFile?.name ?? file.name}</p>
             <p className="text-sm text-white/40 mt-1">
               {compressState === "done"
-                ? `Compressed — ${formatBytes(file.size)}`
+                ? `Audio extracted — ${formatBytes(file.size)}`
                 : formatBytes(file.size)}
             </p>
             <button onClick={(e) => { e.stopPropagation(); clearFile(); }}
@@ -501,7 +512,7 @@ export default function UploadCard() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              <span className="text-sm text-white/70">Preparing compression engine…</span>
+              <span className="text-sm text-white/70">Preparing audio extraction engine…</span>
             </div>
           )}
 
@@ -510,8 +521,8 @@ export default function UploadCard() {
               <div className="flex items-center justify-between text-xs mb-2">
                 <span className={compressState === "done" ? "text-green-400 font-medium" : "text-white/60"}>
                   {compressState === "done"
-                    ? `Compressed: ${compressInfo?.origMb} MB → ${compressInfo?.finalMb} MB ✅`
-                    : "Compressing file — this may take a minute…"}
+                    ? `Audio extracted ✅ — ${compressInfo?.origMb} MB → ${compressInfo?.finalMb} MB`
+                    : "Extracting audio for transcription… (faster!)"}
                 </span>
                 <span className={`tabular-nums font-mono ${compressState === "done" ? "text-green-400" : "text-purple-300"}`}>
                   {compressProgress}%
