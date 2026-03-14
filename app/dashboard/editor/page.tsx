@@ -171,14 +171,19 @@ export default function EditorPage() {
   const [customFiller, setCustomFiller] = useState("");
   const [cleanPreview, setCleanPreview] = useState<{ counts: [string, number][]; affected: number } | null>(null);
 
-  // Toolbar refs — buttons for outside-click detection, panels for fixed-position
+  // "More ▾" dropdown
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  // Toolbar refs
   const toolbarRef    = useRef<HTMLDivElement>(null);
   const chunkBtnRef   = useRef<HTMLButtonElement>(null);
-  const cleanBtnRef   = useRef<HTMLButtonElement>(null);
+  const moreBtnRef    = useRef<HTMLButtonElement>(null);
   const chunkPanelRef = useRef<HTMLDivElement>(null);
   const cleanPanelRef = useRef<HTMLDivElement>(null);
+  const morePanelRef  = useRef<HTMLDivElement>(null);
   const [chunkPos, setChunkPos] = useState<{ top: number; right: number } | null>(null);
   const [cleanPos, setCleanPos] = useState<{ top: number; right: number } | null>(null);
+  const [morePos,  setMorePos]  = useState<{ top: number; right: number } | null>(null);
 
   // Toast notification
   const [toast, setToast] = useState<string | null>(null);
@@ -220,19 +225,21 @@ export default function EditorPage() {
     try { localStorage.setItem("darijasub_style", JSON.stringify(subStyle)); } catch { /* ignore */ }
   }, [subStyle, loaded]);
 
-  // Close popovers on outside click (buttons + fixed panels use separate refs)
+  // Close popovers on outside click
   useEffect(() => {
-    if (!chunkOpen && !cleanOpen) return;
+    if (!chunkOpen && !cleanOpen && !moreOpen) return;
     const h = (e: MouseEvent) => {
       const t = e.target as Node;
       if (chunkOpen && !chunkBtnRef.current?.contains(t) && !chunkPanelRef.current?.contains(t))
         setChunkOpen(false);
-      if (cleanOpen && !cleanBtnRef.current?.contains(t) && !cleanPanelRef.current?.contains(t))
+      if (cleanOpen && !cleanPanelRef.current?.contains(t))
         setCleanOpen(false);
+      if (moreOpen && !moreBtnRef.current?.contains(t) && !morePanelRef.current?.contains(t))
+        setMoreOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, [chunkOpen, cleanOpen]);
+  }, [chunkOpen, cleanOpen, moreOpen]);
 
   // Auto-clear toast
   useEffect(() => {
@@ -554,22 +561,17 @@ export default function EditorPage() {
           )}
         </div>
 
-        {/*
-          Right toolbar: single flat scrollable row.
-          Popovers use position:fixed (computed from button.getBoundingClientRect)
-          so they escape every overflow context and are never clipped.
-        */}
-        <div ref={toolbarRef} className="flex items-center gap-1.5 ml-3 min-w-0 overflow-x-auto flex-nowrap"
-          style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(168,85,247,0.3) transparent" }}>
+        {/* ── Right toolbar: 5 always-visible buttons + More ▾ ── */}
+        <div ref={toolbarRef} className="flex items-center gap-1.5 ml-3 shrink-0">
 
           {/* Chunk */}
           <button ref={chunkBtnRef} type="button"
             onClick={() => {
               const r = chunkBtnRef.current?.getBoundingClientRect();
               if (r) setChunkPos({ top: r.bottom + 8, right: window.innerWidth - r.right });
-              setChunkOpen((o) => !o); setCleanOpen(false);
+              setChunkOpen((o) => !o); setCleanOpen(false); setMoreOpen(false);
             }}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
             style={{
               background: chunkOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
               borderColor: chunkOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
@@ -579,101 +581,70 @@ export default function EditorPage() {
               <circle cx="6" cy="6" r="3" strokeWidth={2}/><circle cx="6" cy="18" r="3" strokeWidth={2}/>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/>
             </svg>
-            <span className="hidden xl:inline">Chunk</span>
-          </button>
-
-          {/* Clean ✂️ */}
-          <button ref={cleanBtnRef} type="button"
-            onClick={() => {
-              const r = cleanBtnRef.current?.getBoundingClientRect();
-              if (r) setCleanPos({ top: r.bottom + 8, right: window.innerWidth - r.right });
-              setCleanOpen((o) => !o); setChunkOpen(false); setCleanPreview(null);
-            }}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
-            style={{
-              background:  cleanOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
-              borderColor: cleanOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
-              color:       cleanOpen ? "#d8b4fe" : "rgba(255,255,255,0.65)",
-            }}>
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M8 8l-2-2m0 0a2 2 0 112.83-2.83L18 12.17M16 16l2 2m0 0a2 2 0 11-2.83 2.83L6 9.83" />
-            </svg>
-            <span className="hidden xl:inline">Clean</span>
-          </button>
-
-          {/* Arabizi */}
-          <button type="button" onClick={toggleScript} disabled={arabiziConverting}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
-            style={{
-              background: scriptMode === "arabizi" ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
-              borderColor: scriptMode === "arabizi" ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
-              color: scriptMode === "arabizi" ? "#d8b4fe" : "rgba(255,255,255,0.65)",
-              opacity: arabiziConverting ? 0.6 : 1,
-              cursor: arabiziConverting ? "not-allowed" : "pointer",
-            }}>
-            {arabiziConverting ? (
-              <svg className="w-3.5 h-3.5 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-            ) : (
-              <span className="font-semibold shrink-0" style={{ fontFamily: "serif", letterSpacing: "0.02em" }}>ع / A</span>
-            )}
-            <span className="hidden xl:inline">{arabiziConverting ? "Converting…" : scriptMode === "arabizi" ? "Arabizi" : "Script"}</span>
-          </button>
-
-          {/* AI Captions */}
-          <button type="button" onClick={() => setCaptionsOpen(true)}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
-            style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)" }}>
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-            </svg>
-            <span className="hidden xl:inline">AI Captions</span>
+            <span className="hidden sm:inline">Chunk</span>
           </button>
 
           {/* Export Video */}
           <button type="button" onClick={() => setVideoExportOpen(true)}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
             style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)" }}>
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.893L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
-            <span className="hidden xl:inline">Export Video</span>
+            <span className="hidden sm:inline">Export Video</span>
           </button>
 
           {/* Style */}
           <button type="button" onClick={() => setStyleOpen((o) => !o)}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
             style={{
               background: styleOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
               borderColor: styleOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
               color: styleOpen ? "#d8b4fe" : "rgba(255,255,255,0.65)",
             }}>
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
             </svg>
-            <span className="hidden xl:inline">Style</span>
+            <span className="hidden sm:inline">Style</span>
           </button>
 
           {/* SRT */}
           <button type="button" onClick={exportSrt}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all text-white/70 hover:text-white border border-white/10 hover:border-white/25"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all text-white/70 hover:text-white border border-white/10 hover:border-white/25"
             style={{ background: "rgba(255,255,255,0.04)" }}>
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            SRT
+            <span className="hidden sm:inline">SRT</span>
           </button>
 
           {/* VTT */}
           <button type="button" onClick={exportVtt}
-            className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
             style={{ background: "rgba(147,51,234,0.1)" }}>
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            VTT
+            <span className="hidden sm:inline">VTT</span>
+          </button>
+
+          {/* More ▾ — Arabizi, AI Captions, Clean */}
+          <button ref={moreBtnRef} type="button"
+            onClick={() => {
+              const r = moreBtnRef.current?.getBoundingClientRect();
+              if (r) setMorePos({ top: r.bottom + 8, right: window.innerWidth - r.right });
+              setMoreOpen((o) => !o); setChunkOpen(false); setCleanOpen(false);
+            }}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            style={{
+              background: moreOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
+              borderColor: moreOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
+              color: moreOpen ? "#d8b4fe" : "rgba(255,255,255,0.65)",
+            }}>
+            More
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
         </div>
       </header>
@@ -813,6 +784,64 @@ export default function EditorPage() {
           </p>
         )}
       </div>
+
+      {/* ── More ▾ dropdown (position:fixed) ───────────────────────────────── */}
+      {moreOpen && morePos && (
+        <div ref={morePanelRef}
+          className="rounded-xl border border-white/10 shadow-2xl overflow-hidden"
+          style={{ position: "fixed", top: morePos.top, right: morePos.right, zIndex: 9999, minWidth: "13rem",
+            background: "linear-gradient(160deg,#1c0b35 0%,#110620 100%)" }}>
+
+          {/* Arabizi toggle row */}
+          <button type="button" disabled={arabiziConverting}
+            onClick={() => { if (!arabiziConverting) { toggleScript(); setMoreOpen(false); } }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors hover:bg-white/5"
+            style={{
+              color: scriptMode === "arabizi" ? "#d8b4fe" : "rgba(255,255,255,0.75)",
+              opacity: arabiziConverting ? 0.6 : 1,
+              cursor: arabiziConverting ? "not-allowed" : "pointer",
+            }}>
+            {arabiziConverting ? (
+              <svg className="w-4 h-4 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <span className="w-4 text-center font-bold shrink-0" style={{ fontFamily: "serif" }}>ع</span>
+            )}
+            <span>{arabiziConverting ? "Converting…" : scriptMode === "arabizi" ? "Switch to Arabic" : "Switch to Arabizi"}</span>
+          </button>
+
+          {/* AI Captions row */}
+          <button type="button"
+            onClick={() => { setCaptionsOpen(true); setMoreOpen(false); }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors hover:bg-white/5"
+            style={{ color: "rgba(255,255,255,0.75)" }}>
+            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            <span>AI Captions</span>
+          </button>
+
+          <div className="border-t mx-3 my-1" style={{ borderColor: "rgba(255,255,255,0.07)" }} />
+
+          {/* Clean row */}
+          <button type="button"
+            onClick={() => {
+              setMoreOpen(false);
+              if (morePos) setCleanPos({ top: morePos.top, right: morePos.right });
+              setCleanOpen(true);
+              setCleanPreview(null);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors hover:bg-white/5"
+            style={{ color: cleanOpen ? "#d8b4fe" : "rgba(255,255,255,0.75)" }}>
+            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
+            </svg>
+            <span>Clean (Remove Fillers)</span>
+          </button>
+        </div>
+      )}
 
       {/* ── Chunk popover (position:fixed — escapes all overflow contexts) ──── */}
       {chunkOpen && chunkPos && (
