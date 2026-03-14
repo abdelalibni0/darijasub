@@ -28,14 +28,20 @@ interface SubtitleInput {
   text:  string;
 }
 
-/** Escape text for ffmpeg drawtext filter */
+/**
+ * Escape text for ffmpeg drawtext filter.
+ * Order matters — backslash must be first to avoid double-escaping.
+ */
 function escapeDrawtext(raw: string): string {
   return raw
-    .replace(/\\/g, "\\\\") // \ → \\
-    .replace(/'/g,  "\\'")  // ' → \'
-    .replace(/:/g,  "\\:")  // : → \:
-    .replace(/%/g,  "\\%")  // % → \%
-    .replace(/\n/g, " ")    // newline → space
+    .replace(/\\/g,  "\\\\")     // 1. \ → \\ (must be first)
+    .replace(/'/g,   "\u2019")   // 2. ' → ' (right apostrophe — avoids shell quoting issues)
+    .replace(/:/g,   "\\:")      // 3. : → \:
+    .replace(/%/g,   "\\%")      // 4. % → \%
+    .replace(/\[/g,  "\\[")      // 5. [ → \[
+    .replace(/\]/g,  "\\]")      // 6. ] → \]
+    .replace(/,/g,   "\\,")      // 7. , → \, (comma separates filter options)
+    .replace(/[\r\n]+/g, " ")    // 8. newlines → space
     .trim();
 }
 
@@ -46,9 +52,8 @@ function escapeDrawtext(raw: string): string {
 function buildDrawtextFilter(subs: SubtitleInput[], fontFile: string, fontSize: number): string {
   return subs.map(sub => {
     const text = escapeDrawtext(sub.text);
-    // Round to 3 decimal places to keep the filter string compact
-    const s = sub.start.toFixed(3);
-    const e = sub.end.toFixed(3);
+    const s    = sub.start.toFixed(3);
+    const e    = sub.end.toFixed(3);
     return (
       `drawtext=text='${text}'` +
       `:fontfile=${fontFile}` +
@@ -127,15 +132,22 @@ export async function POST(request: NextRequest) {
     console.log("[export-video] font in /tmp:", existsSync(tmpFont));
 
     // Build drawtext filter (same approach confirmed working by test-export)
-    const fontSize      = Math.max(24, Math.round(outH * 0.055));
-    const drawtextChain = buildDrawtextFilter(segments, tmpFont, fontSize);
+    const fontSize = Math.max(24, Math.round(outH * 0.055));
+
+    let drawtextChain: string;
+    try {
+      drawtextChain = buildDrawtextFilter(segments, tmpFont, fontSize);
+    } catch (buildErr) {
+      console.error("[export-video] drawtext build error:", buildErr);
+      throw new Error(`Failed to build subtitle filter: ${buildErr instanceof Error ? buildErr.message : buildErr}`);
+    }
 
     const vf =
       `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,` +
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
       drawtextChain;
 
-    console.log("[export-video] drawtext filter:", vf.substring(0, 500));
+    console.log("[export-video] drawtext sample:", drawtextChain.substring(0, 300));
     console.log(`[export-video] Running ffmpeg: ${outW}x${outH} fontsize=${fontSize} crf=${crf} preset=${preset}`);
 
     await new Promise<void>((resolve, reject) => {
