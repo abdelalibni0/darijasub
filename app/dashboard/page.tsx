@@ -1,11 +1,22 @@
 import { createClient } from "@/lib/supabase/server";
 import UploadCard from "@/components/UploadCard";
 
+const now = Date.now();
+const DAY = 24 * 60 * 60 * 1000;
+
 const recentProjects = [
-  { name: "Episode 3 - Vlog", duration: "12:34", status: "completed", lang: "Darija → French", date: "2 hours ago" },
-  { name: "Tutorial Darija", duration: "8:12", status: "completed", lang: "Darija → English", date: "Yesterday" },
-  { name: "Interview show", duration: "45:00", status: "processing", lang: "Darija → MSA", date: "Just now" },
+  { name: "Episode 3 - Vlog",  duration: "12:34", status: "completed",  lang: "Darija → French",   date: "2 hours ago", createdAt: new Date(now - 2 * 60 * 60 * 1000).toISOString() },
+  { name: "Tutorial Darija",   duration: "8:12",  status: "completed",  lang: "Darija → English",  date: "Yesterday",   createdAt: new Date(now - 5 * DAY).toISOString() },
+  { name: "Interview show",    duration: "45:00", status: "processing", lang: "Darija → MSA",      date: "Just now",    createdAt: new Date(now - 6 * DAY - 20 * 60 * 60 * 1000).toISOString() },
 ];
+
+function expiryLabel(createdAt: string): { text: string; urgent: boolean } {
+  const age = Date.now() - new Date(createdAt).getTime();
+  const daysLeft = Math.max(0, Math.ceil((7 * 24 * 60 * 60 * 1000 - age) / (24 * 60 * 60 * 1000)));
+  if (daysLeft === 0) return { text: "Expires today", urgent: true };
+  if (daysLeft === 1) return { text: "Expires tomorrow", urgent: true };
+  return { text: `Expires in ${daysLeft} days`, urgent: daysLeft <= 2 };
+}
 
 const stats = [
   { label: "Videos processed", value: "3", icon: "🎬" },
@@ -60,7 +71,9 @@ export default async function DashboardPage() {
 
         <div className="card overflow-hidden">
           <div className="divide-y divide-white/5">
-            {recentProjects.map((project, i) => (
+            {recentProjects.map((project, i) => {
+              const expiry = expiryLabel(project.createdAt);
+              return (
               <div key={i} className="flex items-center gap-4 p-4 hover:bg-white/5 transition-colors cursor-pointer">
                 {/* Icon */}
                 <div className="w-10 h-10 bg-purple-600/20 rounded-xl flex items-center justify-center text-lg shrink-0">
@@ -71,6 +84,9 @@ export default async function DashboardPage() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-white truncate">{project.name}</div>
                   <div className="text-xs text-white/40 mt-0.5">{project.lang} · {project.duration}</div>
+                  <div className={`text-xs mt-0.5 ${expiry.urgent ? "text-red-400" : "text-white/25"}`}>
+                    {expiry.text}
+                  </div>
                 </div>
 
                 {/* Status */}
@@ -98,7 +114,8 @@ export default async function DashboardPage() {
                   </button>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
