@@ -47,6 +47,24 @@ export default function EditorPage() {
   const segRefs        = useRef<Map<number, HTMLDivElement>>(new Map());
   const userSeekingRef = useRef(false);
 
+  // Chunk popover state
+  const [chunkOpen, setChunkOpen]       = useState(false);
+  const [chunkSize, setChunkSize]       = useState(3);
+  const [chunkMode, setChunkMode]       = useState<"words" | "chars">("words");
+  const chunkPopoverRef = useRef<HTMLDivElement>(null);
+
+  // Close chunk popover on outside click
+  useEffect(() => {
+    if (!chunkOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (chunkPopoverRef.current && !chunkPopoverRef.current.contains(e.target as Node)) {
+        setChunkOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [chunkOpen]);
+
   // ── Load from localStorage ─────────────────────────────────────────────────
 
   useEffect(() => {
@@ -135,6 +153,71 @@ export default function EditorPage() {
     setSegments((prev) => prev.filter((s) => s.id !== id));
   };
 
+  // ── Chunking ───────────────────────────────────────────────────────────────
+
+  const applyChunking = () => {
+    const result: DisplaySegment[] = [];
+    let newId = 1;
+
+    for (const seg of segments) {
+      const totalDuration = seg.endSeconds - seg.startSeconds;
+      if (totalDuration <= 0) { result.push({ ...seg, id: newId++ }); continue; }
+
+      // Split text into units (words or char groups)
+      const units: string[] =
+        chunkMode === "words"
+          ? seg.text.trim().split(/\s+/).filter(Boolean)
+          : (() => {
+              const chars = seg.text.trim();
+              const chunks: string[] = [];
+              for (let i = 0; i < chars.length; i += chunkSize) {
+                chunks.push(chars.slice(i, i + chunkSize).trim());
+              }
+              return chunks.filter(Boolean);
+            })();
+
+      if (units.length === 0) { result.push({ ...seg, id: newId++ }); continue; }
+
+      // Group units into chunks of chunkSize (for word mode)
+      const chunks: string[] = chunkMode === "words"
+        ? (() => {
+            const out: string[] = [];
+            for (let i = 0; i < units.length; i += chunkSize) {
+              out.push(units.slice(i, i + chunkSize).join(" "));
+            }
+            return out;
+          })()
+        : units;
+
+      if (chunks.length === 1) { result.push({ ...seg, id: newId++ }); continue; }
+
+      // Distribute timestamps proportionally by unit count in each chunk
+      const unitCounts = chunks.map((c) =>
+        chunkMode === "words" ? c.split(/\s+/).length : c.length
+      );
+      const totalUnits = unitCounts.reduce((a, b) => a + b, 0);
+
+      let elapsed = seg.startSeconds;
+      for (let i = 0; i < chunks.length; i++) {
+        const proportion = unitCounts[i] / totalUnits;
+        const chunkDuration = totalDuration * proportion;
+        const start = elapsed;
+        const end   = i === chunks.length - 1 ? seg.endSeconds : elapsed + chunkDuration;
+        elapsed = end;
+        result.push(toDisplay({
+          id: newId++,
+          index: newId - 1,
+          startSeconds: start,
+          endSeconds: end,
+          text: chunks[i],
+        }));
+      }
+    }
+
+    setSegments(result);
+    setChunkOpen(false);
+  };
+
   // ── Export ─────────────────────────────────────────────────────────────────
 
   const exportSrt = () => downloadText(segmentsToSrt(segments), `${filename}.srt`);
@@ -189,6 +272,113 @@ export default function EditorPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0 ml-3">
+
+          {/* ── Chunk button + popover ─────────────────────────────────────── */}
+          <div ref={chunkPopoverRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setChunkOpen((o) => !o)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+              style={{
+                background: chunkOpen ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
+                borderColor: chunkOpen ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
+                color: chunkOpen ? "#d8b4fe" : "rgba(255,255,255,0.65)",
+              }}
+            >
+              {/* scissors icon */}
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <circle cx="6" cy="6" r="3" strokeWidth={2}/>
+                <circle cx="6" cy="18" r="3" strokeWidth={2}/>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/>
+              </svg>
+              <span className="hidden sm:inline">Chunk</span>
+            </button>
+
+            {chunkOpen && (
+              <div
+                className="absolute right-0 top-full mt-2 rounded-xl border border-white/10 shadow-2xl p-4 w-64"
+                style={{ background: "linear-gradient(160deg,#1c0b35 0%,#110620 100%)", zIndex: 200 }}
+              >
+                <p className="text-white/80 text-xs font-semibold mb-3 flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <circle cx="6" cy="6" r="3" strokeWidth={2}/><circle cx="6" cy="18" r="3" strokeWidth={2}/>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/>
+                  </svg>
+                  Chunk Words
+                </p>
+
+                {/* Split mode toggle */}
+                <div className="mb-4">
+                  <p className="text-white/40 text-xs mb-1.5">Split mode</p>
+                  <div className="flex rounded-lg overflow-hidden border border-white/10 p-0.5" style={{ background: "rgba(255,255,255,0.04)" }}>
+                    {(["words", "chars"] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setChunkMode(m)}
+                        className="flex-1 py-1.5 rounded-md text-xs font-medium transition-all"
+                        style={{
+                          background: chunkMode === m ? "rgba(147,51,234,0.5)" : "transparent",
+                          color: chunkMode === m ? "#f3e8ff" : "rgba(255,255,255,0.4)",
+                        }}
+                      >
+                        {m === "words" ? "By Words" : "By Characters"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Chunk size slider */}
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-white/40 text-xs">
+                      {chunkMode === "words" ? "Words per chunk" : "Chars per chunk"}
+                    </p>
+                    <span className="text-purple-300 text-xs font-bold tabular-nums w-5 text-right">
+                      {chunkSize}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={chunkMode === "words" ? 6 : 20}
+                    value={chunkSize}
+                    onChange={(e) => setChunkSize(Number(e.target.value))}
+                    className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                    style={{
+                      background: `linear-gradient(90deg,#7c3aed ${((chunkSize - 1) / ((chunkMode === "words" ? 6 : 20) - 1)) * 100}%,rgba(255,255,255,0.1) 0%)`,
+                    }}
+                  />
+                  <div className="flex justify-between mt-1">
+                    <span className="text-white/20 text-xs">1</span>
+                    <span className="text-white/20 text-xs">{chunkMode === "words" ? 6 : 20}</span>
+                  </div>
+                </div>
+
+                {/* Preview hint */}
+                <p className="text-white/25 text-xs mb-3 leading-relaxed">
+                  Each segment&apos;s text will be split into groups of{" "}
+                  <span className="text-purple-300/70">{chunkSize} {chunkMode === "words" ? "words" : "characters"}</span>.
+                  Timestamps are distributed proportionally.
+                </p>
+
+                {/* Apply button */}
+                <button
+                  type="button"
+                  onClick={applyChunking}
+                  className="w-full py-2 rounded-lg text-sm font-semibold transition-all"
+                  style={{
+                    background: "linear-gradient(90deg,#7c3aed,#9333ea)",
+                    color: "#fff",
+                    boxShadow: "0 4px 14px rgba(124,58,237,0.35)",
+                  }}
+                >
+                  Apply Chunking
+                </button>
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             onClick={exportSrt}
