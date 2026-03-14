@@ -137,8 +137,10 @@ export default function EditorPage() {
     try {
       const raw = localStorage.getItem("darijasub_editor");
       if (!raw) { setNotFound(true); setLoaded(true); return; }
-      const data = JSON.parse(raw) as { srtText: string; audioUrl?: string; filename?: string };
-      const parsed = parseSrt(data.srtText);
+      const data = JSON.parse(raw) as { srtText?: string; audioUrl?: string; filename?: string };
+      const srtText = data.srtText ?? "";
+      if (!srtText.trim()) { setNotFound(true); setLoaded(true); return; }
+      const parsed = parseSrt(srtText);
       if (!parsed.length) { setNotFound(true); setLoaded(true); return; }
       setSegments(parsed.map(toDisplay));
       if (data.audioUrl) setAudioUrl(data.audioUrl);

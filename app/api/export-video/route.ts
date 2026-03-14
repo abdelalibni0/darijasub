@@ -46,6 +46,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "storagePath and assContent are required" }, { status: 400 });
     }
 
+    // Validate ASS content has actual subtitle events
+    const dialogueLines = assContent.split("\n").filter((l) => l.startsWith("Dialogue:"));
+    console.log(`[/api/export-video] ASS received: ${assContent.length} chars, ${dialogueLines.length} dialogue events`);
+    if (dialogueLines.length === 0) {
+      return NextResponse.json({ error: "No subtitle content found — ASS file has no dialogue events" }, { status: 400 });
+    }
+
     // Compute output dimensions
     const plat  = PLATFORMS[platform] ?? PLATFORMS.youtube;
     const scale = QUALITY_SCALE[quality] ?? QUALITY_SCALE.medium;
@@ -65,8 +72,12 @@ export async function POST(request: NextRequest) {
     }
 
     const videoBuffer = Buffer.from(await blob.arrayBuffer());
+    console.log(`[/api/export-video] Video downloaded: ${videoBuffer.byteLength} bytes`);
     await writeFile(inputPath, videoBuffer);
+
     await writeFile(assPath, assContent, "utf8");
+    const { size: assFileSize } = await import("fs/promises").then(({ stat }) => stat(assPath));
+    console.log(`[/api/export-video] ASS written to ${assPath}: ${assFileSize} bytes`);
 
     // Build video filter
     const vf =
@@ -74,6 +85,7 @@ export async function POST(request: NextRequest) {
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
       `ass=${assPath.replace(/\\/g, "/")}`;
 
+    console.log(`[/api/export-video] Running ffmpeg: ${outW}x${outH} crf=${crf} platform=${platform}`);
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
         .outputOptions([
@@ -86,8 +98,12 @@ export async function POST(request: NextRequest) {
           "-movflags", "+faststart",
         ])
         .output(outputPath)
-        .on("end", () => resolve())
-        .on("error", (err) => reject(new Error(`ffmpeg: ${err.message}`)))
+        .on("end", () => { console.log("[/api/export-video] ffmpeg done"); resolve(); })
+        .on("error", (err, _stdout, stderr) => {
+          console.error("[/api/export-video] ffmpeg error:", err.message);
+          console.error("[/api/export-video] stderr:", stderr);
+          reject(new Error(`ffmpeg: ${err.message}`));
+        })
         .run();
     });
 

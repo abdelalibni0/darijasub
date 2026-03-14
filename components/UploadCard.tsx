@@ -251,7 +251,12 @@ export default function UploadCard() {
       const detected = transcribeRes.headers.get("X-Detected-Language");
       if (detected) setDetectedLang(formatDetectedLanguage(detected));
 
-      const srtText           = await transcribeRes.text();
+      const srtText = await transcribeRes.text();
+
+      if (!srtText.trim()) {
+        throw new Error("Server returned empty subtitle content — please try again");
+      }
+
       const downloadBlob      = new Blob([srtText], { type: "text/plain;charset=utf-8" });
       const downloadObjectUrl = URL.createObjectURL(downloadBlob);
 
@@ -259,7 +264,16 @@ export default function UploadCard() {
       const match       = disposition.match(/filename="([^"]+)"/);
       const filename    = match?.[1] ?? `subtitles_${mode === "translate" ? targetLang : "transcribed"}.srt`;
 
-      // Upload original video to export-uploads for server-side video export
+      // Store SRT + blob audio URL in localStorage for the editor first
+      // Remove any stale video storage path from a previous session
+      localStorage.removeItem("darijasub_video_url");
+      localStorage.setItem("darijasub_editor", JSON.stringify({
+        srtText,
+        audioUrl: URL.createObjectURL(file),
+        filename: file.name,
+      }));
+
+      // Upload original video to export-uploads for server-side video export (non-critical)
       try {
         const exportUrlRes = await fetch("/api/upload-export-url", {
           method: "POST",
@@ -279,17 +293,6 @@ export default function UploadCard() {
         }
       } catch {
         // Non-critical — export will fall back to in-modal upload
-      }
-
-      // Store SRT + blob audio URL in localStorage for the editor
-      try {
-        localStorage.setItem("darijasub_editor", JSON.stringify({
-          srtText,
-          audioUrl: URL.createObjectURL(file),
-          filename: file.name,
-        }));
-      } catch {
-        // localStorage unavailable
       }
 
       setDownloadUrl(downloadObjectUrl);
