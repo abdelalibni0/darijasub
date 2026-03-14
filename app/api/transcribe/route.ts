@@ -9,6 +9,7 @@ import {
   whisperNameToCode,
 } from "@/lib/languages";
 import {
+  mergeShortSegments,
   whisperSegmentsToSrt,
   segmentsToSrtString,
   type SrtSegment,
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
       model: "whisper-1",
       response_format: "verbose_json",
       timestamp_granularities: ["segment"],
-    });
+    } as Parameters<typeof openai.audio.transcriptions.create>[0]);
 
     await cleanupTempFiles();
 
@@ -72,7 +73,8 @@ export async function POST(request: NextRequest) {
     // Whisper returns a full language name e.g. "arabic", "french", "english"
     const detectedLanguage = transcription.language ?? "unknown";
 
-    let segments = whisperSegmentsToSrt(transcription.segments);
+    const rawSegments = mergeShortSegments(transcription.segments);
+    let segments = whisperSegmentsToSrt(rawSegments);
 
     // ── Step 4: Translate with Claude — only in translate mode ────────────────
     if (mode === "translate" && targetLang) {
