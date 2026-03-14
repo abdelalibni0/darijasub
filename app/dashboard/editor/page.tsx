@@ -121,6 +121,10 @@ export default function EditorPage() {
   // AI Captions modal
   const [captionsOpen, setCaptionsOpen] = useState(false);
 
+  // Video export modal
+  const [videoExportOpen, setVideoExportOpen] = useState(false);
+  const [rawFilename, setRawFilename]         = useState<string | null>(null);
+
   const audioRef       = useRef<HTMLAudioElement>(null);
   const segRefs        = useRef<Map<number, HTMLDivElement>>(new Map());
   const userSeekingRef = useRef(false);
@@ -137,7 +141,10 @@ export default function EditorPage() {
       if (!parsed.length) { setNotFound(true); setLoaded(true); return; }
       setSegments(parsed.map(toDisplay));
       if (data.audioUrl) setAudioUrl(data.audioUrl);
-      if (data.filename) setFilename(data.filename.replace(/\.[^/.]+$/, ""));
+      if (data.filename) {
+        setFilename(data.filename.replace(/\.[^/.]+$/, ""));
+        setRawFilename(data.filename);
+      }
     } catch {
       setNotFound(true);
     }
@@ -400,6 +407,16 @@ export default function EditorPage() {
             <span className="hidden sm:inline">AI Captions</span>
           </button>
 
+          {/* Export Video button */}
+          <button type="button" onClick={() => setVideoExportOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)" }}>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.893L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <span className="hidden sm:inline">Export Video</span>
+          </button>
+
           {/* Style panel toggle */}
           <button type="button" onClick={() => setStyleOpen((o) => !o)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
@@ -507,6 +524,17 @@ export default function EditorPage() {
         <CaptionsModal
           segments={segments}
           onClose={() => setCaptionsOpen(false)}
+        />
+      )}
+
+      {/* ── Video Export modal ──────────────────────────────────────────────── */}
+      {videoExportOpen && (
+        <VideoExportModal
+          segments={segments}
+          style={subStyle}
+          audioUrl={audioUrl}
+          rawFilename={rawFilename}
+          onClose={() => setVideoExportOpen(false)}
         />
       )}
 
@@ -1241,6 +1269,444 @@ function ResultCard({
           {value}
         </p>
       )}
+    </div>
+  );
+}
+
+// ── VideoExportModal ────────────────────────────────────────────────────────────
+
+const EXPORT_PLATFORMS = [
+  { id: "youtube",          label: "YouTube",          aspect: "16:9", emoji: "▶️", w: 1920, h: 1080 },
+  { id: "tiktok",           label: "TikTok",           aspect: "9:16", emoji: "🎵", w: 1080, h: 1920 },
+  { id: "instagram_reels",  label: "Instagram Reels",  aspect: "9:16", emoji: "📸", w: 1080, h: 1920 },
+  { id: "instagram_square", label: "Instagram Square", aspect: "1:1",  emoji: "⬜", w: 1080, h: 1080 },
+];
+
+const EXPORT_QUALITIES = [
+  { id: "high",   label: "High",   sub: "1080p", crf: 18 },
+  { id: "medium", label: "Medium", sub: "720p",  crf: 23 },
+  { id: "fast",   label: "Fast",   sub: "480p",  crf: 28 },
+];
+
+const QUALITY_SCALE: Record<string, number> = { high: 1, medium: 720 / 1080, fast: 480 / 1080 };
+
+const AUDIO_EXTENSIONS = [".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac"];
+
+function generateASS(
+  segments: DisplaySegment[],
+  style: SubStyle,
+  playResX: number,
+  playResY: number,
+): string {
+  const alignMap: Record<string, number> = {
+    "top-left": 7,    "top-center": 8,    "top-right": 9,
+    "middle-left": 4, "middle-center": 5, "middle-right": 6,
+    "bottom-left": 1, "bottom-center": 2, "bottom-right": 3,
+  };
+  const alignment = alignMap[style.position] ?? 2;
+
+  // Hex + alpha → ASS &HAABBGGRR (alpha 0 = opaque)
+  const hexToAss = (hex: string, alphaPct = 0): string => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const a = Math.round((alphaPct / 100) * 255);
+    const h2 = (n: number) => n.toString(16).padStart(2, "0").toUpperCase();
+    return `&H${h2(a)}${h2(b)}${h2(g)}${h2(r)}`;
+  };
+
+  const scaledSize  = Math.round(style.fontSize * (playResY / 1080));
+  const primary     = hexToAss(style.textColor, 0);
+  const outline     = hexToAss(style.strokeColor, 0);
+  const back        = hexToAss(style.bgColor, 100 - style.bgOpacity);
+  const borderStyle = style.bgOpacity > 0 ? 3 : 1;
+  const outlineW    = borderStyle === 1 ? style.strokeWidth : 0;
+  const bold        = style.bold ? -1 : 0;
+  const italic      = style.italic ? -1 : 0;
+  const marginV     = Math.round(playResY * 0.05);
+
+  const toTime = (s: number) => {
+    const h  = Math.floor(s / 3600);
+    const m  = Math.floor((s % 3600) / 60);
+    const sc = Math.floor(s % 60);
+    const cs = Math.round((s % 1) * 100);
+    return `${h}:${String(m).padStart(2,"0")}:${String(sc).padStart(2,"0")}.${String(cs).padStart(2,"0")}`;
+  };
+
+  const header = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    `PlayResX: ${playResX}`,
+    `PlayResY: ${playResY}`,
+    "ScaledBorderAndShadow: yes",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    `Style: Default,${style.fontFamily},${scaledSize},${primary},&H000000FF,${outline},${back},${bold},${italic},0,0,100,100,0,0,${borderStyle},${outlineW},0,${alignment},10,10,${marginV},1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ].join("\n");
+
+  const events = segments
+    .map(seg => `Dialogue: 0,${toTime(seg.startSeconds)},${toTime(seg.endSeconds)},Default,,0,0,0,,${seg.text.replace(/\n/g, "\\N")}`)
+    .join("\n");
+
+  return `${header}\n${events}\n`;
+}
+
+function VideoExportModal({
+  segments,
+  style,
+  audioUrl,
+  rawFilename,
+  onClose,
+}: {
+  segments: DisplaySegment[];
+  style: SubStyle;
+  audioUrl: string | null;
+  rawFilename: string | null;
+  onClose: () => void;
+}) {
+  const [platform, setPlatform] = useState("youtube");
+  const [quality, setQuality]   = useState("medium");
+  const [phase, setPhase]       = useState<"idle" | "loading" | "processing" | "done" | "error">("idle");
+  const [progress, setProgress] = useState(0);
+  const [statusText, setStatusText] = useState("");
+  const [error, setError]       = useState<string | null>(null);
+
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ffmpegRef   = useRef<any>(null);
+
+  const isAudioOnly = rawFilename
+    ? AUDIO_EXTENSIONS.some(ext => rawFilename.toLowerCase().endsWith(ext))
+    : false;
+
+  const plat = EXPORT_PLATFORMS.find(p => p.id === platform)!;
+  const busy = phase === "loading" || phase === "processing";
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose, busy]);
+
+  const handleExport = async () => {
+    if (!audioUrl) { setError("No video source available."); return; }
+
+    const qual = EXPORT_QUALITIES.find(q => q.id === quality)!;
+    const scale = QUALITY_SCALE[quality] ?? 1;
+    let outW = Math.round(plat.w * scale);
+    let outH = Math.round(plat.h * scale);
+    if (outW % 2 !== 0) outW--;
+    if (outH % 2 !== 0) outH--;
+
+    setError(null);
+    setProgress(0);
+
+    try {
+      // ── 1. Load engine ───────────────────────────────────────────────────
+      setPhase("loading");
+      setStatusText("Loading video engine…");
+      setProgress(2);
+
+      if (!ffmpegRef.current) {
+        const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+        const { toBlobURL } = await import("@ffmpeg/util");
+        const ffmpeg = new FFmpeg();
+        const BASE = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
+        await ffmpeg.load({
+          coreURL: await toBlobURL(`${BASE}/ffmpeg-core.js`,   "text/javascript"),
+          wasmURL: await toBlobURL(`${BASE}/ffmpeg-core.wasm`, "application/wasm"),
+        });
+        ffmpegRef.current = ffmpeg;
+      }
+
+      const ffmpeg = ffmpegRef.current;
+
+      // ── 2. Prepare ───────────────────────────────────────────────────────
+      setPhase("processing");
+      setStatusText("Loading video file…");
+      setProgress(8);
+
+      const { fetchFile } = await import("@ffmpeg/util");
+
+      const progressHandler = ({ progress: p }: { progress: number }) => {
+        if (Number.isFinite(p) && p >= 0) {
+          setProgress(15 + Math.round(p * 80));
+          setStatusText(`Encoding… ${Math.round(p * 100)}%`);
+        }
+      };
+      ffmpeg.on("progress", progressHandler);
+
+      const assContent = generateASS(segments, style, outW, outH);
+      await ffmpeg.writeFile("input.mp4", await fetchFile(audioUrl));
+      await ffmpeg.writeFile("subtitles.ass", new TextEncoder().encode(assContent));
+
+      // ── 3. Encode ────────────────────────────────────────────────────────
+      setStatusText("Burning subtitles…");
+      setProgress(15);
+
+      const vf =
+        `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,` +
+        `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
+        `ass=subtitles.ass`;
+
+      await ffmpeg.exec([
+        "-i",        "input.mp4",
+        "-vf",       vf,
+        "-c:v",      "libx264",
+        "-crf",      String(qual.crf),
+        "-preset",   "ultrafast",
+        "-c:a",      "aac",
+        "-b:a",      "128k",
+        "-movflags", "+faststart",
+        "output.mp4",
+      ]);
+
+      ffmpeg.off("progress", progressHandler);
+
+      // ── 4. Download ──────────────────────────────────────────────────────
+      setStatusText("Preparing download…");
+      setProgress(97);
+
+      const data = await ffmpeg.readFile("output.mp4") as Uint8Array;
+      const blob = new Blob([data], { type: "video/mp4" });
+      const dlUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = dlUrl;
+      a.download = `${(rawFilename ?? "video").replace(/\.[^/.]+$/, "")}_${platform}_${quality}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(dlUrl), 2000);
+
+      // Cleanup FFmpeg FS
+      for (const f of ["input.mp4", "subtitles.ass", "output.mp4"]) {
+        try { await ffmpeg.deleteFile(f); } catch { /* ignore */ }
+      }
+
+      setProgress(100);
+      setStatusText("Download started!");
+      setPhase("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Export failed. Check the browser console for details.");
+      setPhase("error");
+    }
+  };
+
+  // Preview bg with opacity
+  const prevBgR = parseInt(style.bgColor.slice(1, 3), 16);
+  const prevBgG = parseInt(style.bgColor.slice(3, 5), 16);
+  const prevBgB = parseInt(style.bgColor.slice(5, 7), 16);
+  const prevBgCss = style.bgOpacity > 0
+    ? `rgba(${prevBgR},${prevBgG},${prevBgB},${style.bgOpacity / 100})`
+    : "transparent";
+
+  return (
+    <div
+      ref={backdropRef}
+      className="fixed inset-0 flex items-center justify-center p-4"
+      style={{ zIndex: 9999, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(6px)" }}
+      onClick={(e) => { if (e.target === backdropRef.current && !busy) onClose(); }}
+    >
+      <div
+        className="w-full max-w-md flex flex-col rounded-2xl border border-white/10 shadow-2xl"
+        style={{ background: "linear-gradient(160deg,#1a0a2e 0%,#0f0518 100%)", maxHeight: "90vh" }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/8 shrink-0">
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.893L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <span className="text-white font-semibold text-sm">Export Video</span>
+          </div>
+          {!busy && (
+            <button type="button" onClick={onClose}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-white/30 hover:text-white/80 transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
+
+          {/* Audio-only warning */}
+          {isAudioOnly && (
+            <div className="rounded-xl px-4 py-3 text-sm text-yellow-300 flex items-start gap-2"
+              style={{ background: "rgba(234,179,8,0.1)", border: "1px solid rgba(234,179,8,0.25)" }}>
+              <svg className="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>Video export requires a video file. Please upload an MP4 or MOV file.</span>
+            </div>
+          )}
+
+          {/* Platform selector */}
+          <div>
+            <p className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2">Platform</p>
+            <div className="grid grid-cols-2 gap-2">
+              {EXPORT_PLATFORMS.map((p) => (
+                <button key={p.id} type="button" disabled={busy}
+                  onClick={() => setPlatform(p.id)}
+                  className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all text-left"
+                  style={{
+                    background: platform === p.id ? "rgba(147,51,234,0.35)" : "rgba(255,255,255,0.05)",
+                    border: platform === p.id ? "1px solid rgba(168,85,247,0.55)" : "1px solid rgba(255,255,255,0.08)",
+                    color: platform === p.id ? "#f3e8ff" : "rgba(255,255,255,0.55)",
+                  }}>
+                  <span className="text-base">{p.emoji}</span>
+                  <div>
+                    <div className="text-xs font-semibold leading-tight">{p.label}</div>
+                    <div className="text-xs opacity-55">{p.aspect}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Quality selector */}
+          <div>
+            <p className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2">Quality</p>
+            <div className="flex gap-2">
+              {EXPORT_QUALITIES.map((q) => (
+                <button key={q.id} type="button" disabled={busy}
+                  onClick={() => setQuality(q.id)}
+                  className="flex-1 flex flex-col items-center py-2.5 px-2 rounded-xl text-xs font-medium transition-all"
+                  style={{
+                    background: quality === q.id ? "rgba(147,51,234,0.35)" : "rgba(255,255,255,0.05)",
+                    border: quality === q.id ? "1px solid rgba(168,85,247,0.55)" : "1px solid rgba(255,255,255,0.08)",
+                    color: quality === q.id ? "#f3e8ff" : "rgba(255,255,255,0.55)",
+                  }}>
+                  <span className="font-semibold">{q.label}</span>
+                  <span className="opacity-55">{q.sub}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Subtitle style preview */}
+          <div>
+            <p className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2">Subtitle Preview</p>
+            <div
+              className="relative rounded-xl overflow-hidden"
+              style={{
+                background: "#0a0a0a",
+                aspectRatio: `${plat.w} / ${plat.h}`,
+                maxHeight: "200px",
+                border: "1px solid rgba(255,255,255,0.07)",
+              }}
+            >
+              {/* Background scene hint */}
+              <div className="absolute inset-0 flex items-center justify-center opacity-15">
+                <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
+              {/* Subtitle */}
+              <div
+                className="absolute"
+                style={{
+                  ...POSITION_STYLES[style.position],
+                  fontSize: `${Math.max(9, style.fontSize * 0.3)}px`,
+                  fontFamily: style.fontFamily,
+                  fontWeight: style.bold ? "bold" : "normal",
+                  fontStyle: style.italic ? "italic" : "normal",
+                  color: style.textColor,
+                  background: prevBgCss,
+                  padding: style.bgOpacity > 0 ? "2px 6px" : "0",
+                  borderRadius: style.bgOpacity > 0 ? "3px" : "0",
+                  WebkitTextStroke: style.strokeWidth > 0 ? `${style.strokeWidth * 0.3}px ${style.strokeColor}` : undefined,
+                  textAlign: style.position.includes("center") ? "center" : style.position.includes("right") ? "right" : "left",
+                  maxWidth: "90%",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                مرحبا | Hello World
+              </div>
+            </div>
+          </div>
+
+          {/* Progress */}
+          {phase !== "idle" && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-white/60">{statusText}</span>
+                <span className="text-purple-300 tabular-nums font-mono">{progress}%</span>
+              </div>
+              <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${progress}%`,
+                    background: phase === "done"
+                      ? "linear-gradient(90deg,#22c55e,#16a34a)"
+                      : "linear-gradient(90deg,#7c3aed,#9333ea)",
+                  }}
+                />
+              </div>
+              {phase === "done" && (
+                <p className="text-green-400 text-xs text-center">✓ Export complete! Check your downloads folder.</p>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="rounded-xl px-4 py-3 text-sm text-red-300"
+              style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)" }}>
+              {error}
+            </div>
+          )}
+
+          {/* Export button */}
+          {!isAudioOnly && phase !== "done" && (
+            <button type="button" onClick={handleExport} disabled={busy}
+              className="w-full py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+              style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff", boxShadow: "0 4px 20px rgba(124,58,237,0.4)" }}>
+              {busy ? (
+                <>
+                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  {phase === "loading" ? "Loading engine…" : "Processing…"}
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Export Video
+                </>
+              )}
+            </button>
+          )}
+
+          {/* Post-export actions */}
+          {phase === "done" && (
+            <div className="flex gap-2">
+              <button type="button"
+                onClick={() => { setPhase("idle"); setProgress(0); setStatusText(""); setError(null); }}
+                className="flex-1 py-2.5 rounded-xl font-semibold text-sm text-white/70 hover:text-white border border-white/10 transition-all"
+                style={{ background: "rgba(255,255,255,0.04)" }}>
+                Export Another
+              </button>
+              <button type="button" onClick={onClose}
+                className="flex-1 py-2.5 rounded-xl font-semibold text-sm"
+                style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff" }}>
+                Done
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
