@@ -46,10 +46,13 @@ const GROUPED = GROUP_ORDER.reduce<Record<LangGroup, Language[]>>(
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Status = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
-type Mode   = "transcribe" | "translate";
+type Status       = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
+type Mode         = "transcribe" | "translate";
+type CompressState = "idle" | "loading_engine" | "compressing" | "done";
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024;
+const MAX_FILE_SIZE  = 25 * 1024 * 1024;
+const AUDIO_EXTS     = [".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac"];
+const FFMPEG_CDN     = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
 
 function getSteps(mode: Mode) {
   return mode === "translate"
@@ -71,8 +74,10 @@ function getSteps(mode: Mode) {
 export default function UploadCard() {
   const router = useRouter();
 
+  // Core state
   const [dragging, setDragging]         = useState(false);
-  const [file, setFile]                 = useState<File | null>(null);
+  const [file, setFile]                 = useState<File | null>(null);       // file used for upload (may be compressed)
+  const [originalFile, setOriginalFile] = useState<File | null>(null);       // original full-quality file
   const [mode, setMode]                 = useState<Mode>("translate");
   const [targetLang, setTargetLang]     = useState("en");
   const [status, setStatus]             = useState<Status>("idle");
@@ -83,17 +88,25 @@ export default function UploadCard() {
   const [stepIndex, setStepIndex]       = useState(0);
   const [progress, setProgress]         = useState(0);
 
+  // Compression state
+  const [compressState, setCompressState]     = useState<CompressState>("idle");
+  const [compressProgress, setCompressProgress] = useState(0);
+  const [compressInfo, setCompressInfo]       = useState<{ origMb: string; finalMb: string } | null>(null);
+
   // Language picker state
   const [langOpen, setLangOpen]   = useState(false);
   const [langQuery, setLangQuery] = useState("");
-  const langRef     = useRef<HTMLDivElement>(null);
+  const langRef       = useRef<HTMLDivElement>(null);
   const langSearchRef = useRef<HTMLInputElement>(null);
 
-  const inputRef           = useRef<HTMLInputElement>(null);
+  const inputRef            = useRef<HTMLInputElement>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ffmpegRef           = useRef<any>(null);
 
-  const isProcessing = ["uploading", "transcribing", "translating"].includes(status);
-  const showProgress = isProcessing || status === "done";
+  const isCompressing = compressState === "loading_engine" || compressState === "compressing";
+  const isProcessing  = ["uploading", "transcribing", "translating"].includes(status);
+  const showProgress  = isProcessing || status === "done";
 
   const steps    = getSteps(mode);
   const statuses = steps.map((_, i) =>
@@ -103,7 +116,8 @@ export default function UploadCard() {
   const selectedLang = LANGUAGES.find((l) => l.value === targetLang);
   const selectedFlag = selectedLang ? (FLAGS[selectedLang.value] ?? "🌐") : "🌐";
 
-  // Close lang dropdown on outside click
+  // ── Language picker effects ───────────────────────────────────────────────────
+
   useEffect(() => {
     if (!langOpen) return;
     const handler = (e: MouseEvent) => {
@@ -116,12 +130,10 @@ export default function UploadCard() {
     return () => document.removeEventListener("mousedown", handler);
   }, [langOpen]);
 
-  // Focus search when dropdown opens
   useEffect(() => {
     if (langOpen) setTimeout(() => langSearchRef.current?.focus(), 30);
   }, [langOpen]);
 
-  // Close on Escape
   useEffect(() => {
     if (!langOpen) return;
     const handler = (e: KeyboardEvent) => {
@@ -145,7 +157,7 @@ export default function UploadCard() {
     resetResult();
   };
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────────
 
   const formatBytes = (bytes: number) =>
     bytes < 1024 * 1024
@@ -181,11 +193,112 @@ export default function UploadCard() {
     setDownloadUrl(null);
   };
 
-  const validateAndSetFile = (f: File) => {
+  const clearFile = () => {
+    setFile(null);
+    setOriginalFile(null);
+    setCompressState("idle");
+    setCompressProgress(0);
+    setCompressInfo(null);
     resetResult();
-    if (f.size > MAX_FILE_SIZE) {
-      setError(`File is ${formatBytes(f.size)} — Whisper's limit is 25 MB. Please compress or trim the file first.`);
+  };
+
+  // ── Compression ───────────────────────────────────────────────────────────────
+
+  const compressFile = async (f: File) => {
+    const isAudio = AUDIO_EXTS.some(ext => f.name.toLowerCase().endsWith(ext));
+
+    try {
+      // Load engine (cached after first use)
+      setCompressState("loading_engine");
+      setCompressProgress(0);
+
+      if (!ffmpegRef.current) {
+        const { FFmpeg }   = await import("@ffmpeg/ffmpeg");
+        const { toBlobURL } = await import("@ffmpeg/util");
+        const ffmpeg = new FFmpeg();
+        await ffmpeg.load({
+          coreURL: await toBlobURL(`${FFMPEG_CDN}/ffmpeg-core.js`,   "text/javascript"),
+          wasmURL: await toBlobURL(`${FFMPEG_CDN}/ffmpeg-core.wasm`, "application/wasm"),
+        });
+        ffmpegRef.current = ffmpeg;
+      }
+
+      const ffmpeg = ffmpegRef.current;
+      setCompressState("compressing");
+
+      const { fetchFile } = await import("@ffmpeg/util");
+
+      const ext    = f.name.match(/\.[^/.]+$/)?.[0] ?? "";
+      const inName = `input${ext}`;
+      const outName = isAudio ? "output.mp3" : "output.mp4";
+
+      const progressHandler = ({ progress: p }: { progress: number }) => {
+        if (Number.isFinite(p) && p >= 0) setCompressProgress(Math.round(p * 100));
+      };
+      ffmpeg.on("progress", progressHandler);
+
+      await ffmpeg.writeFile(inName, await fetchFile(f));
+
+      if (isAudio) {
+        await ffmpeg.exec([
+          "-i", inName,
+          "-c:a", "libmp3lame",
+          "-b:a", "128k",
+          "-map_metadata", "-1",
+          outName,
+        ]);
+      } else {
+        await ffmpeg.exec([
+          "-i", inName,
+          "-c:v", "libx264",
+          "-crf", "28",
+          "-preset", "ultrafast",
+          "-c:a", "aac",
+          "-b:a", "64k",
+          "-map_metadata", "-1",
+          outName,
+        ]);
+      }
+
+      ffmpeg.off("progress", progressHandler);
+
+      const data = await ffmpeg.readFile(outName) as Uint8Array;
+      const ab   = new ArrayBuffer(data.byteLength);
+      new Uint8Array(ab).set(data);
+
+      const mimeType     = isAudio ? "audio/mpeg" : "video/mp4";
+      const outFilename  = f.name.replace(/\.[^/.]+$/, isAudio ? ".mp3" : ".mp4");
+      const compressed   = new File([ab], outFilename, { type: mimeType });
+
+      for (const name of [inName, outName]) {
+        try { await ffmpeg.deleteFile(name); } catch { /* ignore */ }
+      }
+
+      setCompressInfo({
+        origMb:  (f.size           / 1024 / 1024).toFixed(1),
+        finalMb: (compressed.size  / 1024 / 1024).toFixed(1),
+      });
+      setCompressProgress(100);
+      setCompressState("done");
+      setFile(compressed);
+
+    } catch {
+      // Compression failed — show a normal error
+      setCompressState("idle");
+      setError(`File is ${formatBytes(f.size)} — auto-compression failed. Please trim the file to under 25 MB and try again.`);
       setStatus("error");
+    }
+  };
+
+  // ── File selection ────────────────────────────────────────────────────────────
+
+  const validateAndSetFile = (f: File) => {
+    clearFile();
+
+    if (f.size > MAX_FILE_SIZE) {
+      // Auto-compress instead of blocking with an error
+      setOriginalFile(f);
+      compressFile(f);
       return;
     }
     setFile(f);
@@ -202,6 +315,8 @@ export default function UploadCard() {
     const sel = e.target.files?.[0];
     if (sel) validateAndSetFile(sel);
   };
+
+  // ── Submit ────────────────────────────────────────────────────────────────────
 
   const handleSubmit = async () => {
     if (!file) return;
@@ -260,29 +375,31 @@ export default function UploadCard() {
       const detected = transcribeRes.headers.get("X-Detected-Language");
       if (detected) setDetectedLang(formatDetectedLanguage(detected));
 
-      const srtText = await transcribeRes.text();
-      const downloadBlob = new Blob([srtText], { type: "text/plain;charset=utf-8" });
+      const srtText          = await transcribeRes.text();
+      const downloadBlob     = new Blob([srtText], { type: "text/plain;charset=utf-8" });
       const downloadObjectUrl = URL.createObjectURL(downloadBlob);
 
       const disposition = transcribeRes.headers.get("Content-Disposition") ?? "";
-      const match = disposition.match(/filename="([^"]+)"/);
-      const filename = match?.[1] ?? `subtitles_${mode === "translate" ? targetLang : "transcribed"}.srt`;
+      const match       = disposition.match(/filename="([^"]+)"/);
+      const filename    = match?.[1] ?? `subtitles_${mode === "translate" ? targetLang : "transcribed"}.srt`;
 
-      // Store SRT + audio URL in localStorage for the editor
+      // Store SRT + audio URL in localStorage.
+      // Use the ORIGINAL file (full quality) for editor playback & video export.
       try {
-        const audioObjectUrl = file ? URL.createObjectURL(file) : null;
+        const editorFile     = originalFile ?? file;
+        const audioObjectUrl = URL.createObjectURL(editorFile);
         localStorage.setItem("darijasub_editor", JSON.stringify({
           srtText,
           audioUrl: audioObjectUrl,
-          filename: file?.name ?? filename,
+          filename: editorFile.name,
         }));
       } catch {
-        // localStorage unavailable — editor won't have audio but that's fine
+        // localStorage unavailable
       }
 
       setDownloadUrl(downloadObjectUrl);
       setDownloadFilename(filename);
-      setStepIndex(steps.length); // all done
+      setStepIndex(steps.length);
       setProgress(100);
       setStatus("done");
     } catch (err) {
@@ -302,11 +419,11 @@ export default function UploadCard() {
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
-        onClick={() => !isProcessing && !showProgress && inputRef.current?.click()}
+        onClick={() => !isProcessing && !showProgress && !isCompressing && inputRef.current?.click()}
         className={`border-2 border-dashed rounded-xl p-10 text-center transition-all duration-200 ${
-          isProcessing            ? "border-purple-500/30 bg-purple-500/5 cursor-default"
-          : dragging              ? "border-purple-500 bg-purple-500/10 cursor-pointer"
-          : file                  ? "border-purple-500/40 bg-purple-500/5 cursor-pointer"
+          isProcessing || isCompressing ? "border-purple-500/30 bg-purple-500/5 cursor-default"
+          : dragging                   ? "border-purple-500 bg-purple-500/10 cursor-pointer"
+          : (file || originalFile)     ? "border-purple-500/40 bg-purple-500/5 cursor-pointer"
           : "border-white/15 hover:border-purple-500/40 hover:bg-white/3 cursor-pointer"
         }`}
       >
@@ -317,6 +434,7 @@ export default function UploadCard() {
 
         {isProcessing ? (
           <p className="font-semibold text-white/60 text-sm">{file?.name}</p>
+
         ) : status === "done" && downloadUrl ? (
           <div>
             <div className="text-4xl mb-3">✅</div>
@@ -329,31 +447,91 @@ export default function UploadCard() {
                 Detected: {detectedLang}
               </span>
             )}
-            <p className="text-sm text-white/40 mt-2">{file?.name}</p>
-            <button onClick={(e) => { e.stopPropagation(); setFile(null); resetResult(); }}
+            <p className="text-sm text-white/40 mt-2">{originalFile?.name ?? file?.name}</p>
+            <button onClick={(e) => { e.stopPropagation(); clearFile(); }}
               className="mt-3 text-xs text-white/30 hover:text-white/60 transition-colors">
               Start over
             </button>
           </div>
+
+        ) : originalFile && isCompressing ? (
+          // During compression: show original file info with spinner
+          <div>
+            <div className="text-4xl mb-3">⚙️</div>
+            <p className="font-semibold text-white">{originalFile.name}</p>
+            <p className="text-sm text-white/40 mt-1">{formatBytes(originalFile.size)}</p>
+          </div>
+
         ) : file ? (
           <div>
             <div className="text-4xl mb-3">🎬</div>
-            <p className="font-semibold text-white">{file.name}</p>
-            <p className="text-sm text-white/40 mt-1">{formatBytes(file.size)}</p>
-            <button onClick={(e) => { e.stopPropagation(); setFile(null); resetResult(); }}
+            <p className="font-semibold text-white">{originalFile?.name ?? file.name}</p>
+            <p className="text-sm text-white/40 mt-1">
+              {compressState === "done"
+                ? `Compressed — ${formatBytes(file.size)}`
+                : formatBytes(file.size)}
+            </p>
+            <button onClick={(e) => { e.stopPropagation(); clearFile(); }}
               className="mt-3 text-xs text-white/30 hover:text-white/60 transition-colors">
               Remove file
             </button>
           </div>
+
         ) : (
           <div>
             <div className="text-4xl mb-3">⬆️</div>
             <p className="font-semibold text-white">Drop your video or audio here</p>
             <p className="text-sm text-white/40 mt-1">Language detected automatically — MP4, MOV, MP3, WAV, M4A supported</p>
-            <p className="text-xs text-white/25 mt-3">Max 25 MB (Whisper limit)</p>
+            <p className="text-xs text-white/25 mt-3">Files over 25 MB are compressed automatically</p>
           </div>
         )}
       </div>
+
+      {/* ── Compression progress ─────────────────────────────────────────────── */}
+      {compressState !== "idle" && (
+        <div className="mt-4 rounded-xl border px-4 py-3"
+          style={{
+            background: "rgba(109,40,217,0.08)",
+            borderColor: compressState === "done" ? "rgba(34,197,94,0.3)" : "rgba(147,51,234,0.25)",
+          }}>
+
+          {compressState === "loading_engine" && (
+            <div className="flex items-center gap-2.5">
+              <svg className="animate-spin w-4 h-4 text-purple-400 shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span className="text-sm text-white/70">Preparing compression engine…</span>
+            </div>
+          )}
+
+          {(compressState === "compressing" || compressState === "done") && (
+            <>
+              <div className="flex items-center justify-between text-xs mb-2">
+                <span className={compressState === "done" ? "text-green-400 font-medium" : "text-white/60"}>
+                  {compressState === "done"
+                    ? `Compressed: ${compressInfo?.origMb} MB → ${compressInfo?.finalMb} MB ✅`
+                    : "Compressing file — this may take a minute…"}
+                </span>
+                <span className={`tabular-nums font-mono ${compressState === "done" ? "text-green-400" : "text-purple-300"}`}>
+                  {compressProgress}%
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${compressProgress}%`,
+                    background: compressState === "done"
+                      ? "linear-gradient(90deg,#22c55e,#16a34a)"
+                      : "linear-gradient(90deg,#7c3aed,#9333ea)",
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Mode toggle */}
       <div className="mt-5">
@@ -361,7 +539,7 @@ export default function UploadCard() {
           {(["transcribe", "translate"] as Mode[]).map((m) => (
             <button key={m} type="button"
               onClick={() => { setMode(m); resetResult(); }}
-              disabled={isProcessing}
+              disabled={isProcessing || isCompressing}
               className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed ${
                 mode === m ? "bg-purple-600 text-white shadow shadow-purple-900/40" : "text-white/50 hover:text-white/80"
               }`}
@@ -393,8 +571,8 @@ export default function UploadCard() {
           {/* Trigger button */}
           <button
             type="button"
-            disabled={isProcessing}
-            onClick={() => { if (!isProcessing) setLangOpen((o) => !o); }}
+            disabled={isProcessing || isCompressing}
+            onClick={() => { if (!isProcessing && !isCompressing) setLangOpen((o) => !o); }}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               background: "rgba(255,255,255,0.05)",
@@ -445,7 +623,6 @@ export default function UploadCard() {
               {/* Language list */}
               <div className="overflow-y-auto" style={{ maxHeight: "280px" }}>
                 {filteredLangs ? (
-                  // Search results
                   filteredLangs.length === 0 ? (
                     <p className="text-center text-white/30 text-sm py-6">No languages found</p>
                   ) : (
@@ -457,7 +634,6 @@ export default function UploadCard() {
                     </div>
                   )
                 ) : (
-                  // Grouped list
                   GROUP_ORDER.map((group) => {
                     const langs = GROUPED[group];
                     if (!langs.length) return null;
@@ -504,13 +680,25 @@ export default function UploadCard() {
       {!showProgress && (
         <div className="mt-5">
           <button type="button" onClick={handleSubmit}
-            disabled={!file || isProcessing}
+            disabled={!file || isProcessing || isCompressing}
             className={`w-full btn-primary flex items-center justify-center gap-2 ${
-              !file || isProcessing ? "opacity-40 cursor-not-allowed hover:scale-100" : ""
+              !file || isProcessing || isCompressing ? "opacity-40 cursor-not-allowed hover:scale-100" : ""
             }`}
           >
-            <span>Generate subtitles</span>
-            <span>→</span>
+            {isCompressing ? (
+              <>
+                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Compressing…
+              </>
+            ) : (
+              <>
+                <span>Generate subtitles</span>
+                <span>→</span>
+              </>
+            )}
           </button>
         </div>
       )}
@@ -537,7 +725,7 @@ export default function UploadCard() {
               Open Editor
             </button>
           </div>
-          <button type="button" onClick={() => { setFile(null); resetResult(); }}
+          <button type="button" onClick={clearFile}
             className="text-xs text-white/30 hover:text-white/60 transition-colors py-1">
             Start over
           </button>
