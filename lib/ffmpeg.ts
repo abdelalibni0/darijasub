@@ -14,11 +14,13 @@ const WHISPER_NATIVE = new Set([
   "flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm",
 ]);
 
+const WHISPER_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
+
 /**
- * If the file is already a Whisper-compatible format, returns it as-is.
- * Otherwise converts to MP3 via ffmpeg using /tmp for temp storage.
- *
- * Returns the File to send to Whisper and a cleanup function to call when done.
+ * Ensures the file is both a Whisper-compatible format AND under 25 MB.
+ * - Wrong format → convert to MP3 via server ffmpeg
+ * - Right format but > 25 MB → extract audio track as 128k MP3 via server ffmpeg
+ * - Right format and ≤ 25 MB → return as-is (no ffmpeg needed)
  */
 export async function ensureWhisperCompatible(
   blob: Blob,
@@ -26,7 +28,8 @@ export async function ensureWhisperCompatible(
 ): Promise<{ file: File; cleanup: () => Promise<void> }> {
   const ext = originalName.split(".").pop()?.toLowerCase() ?? "";
 
-  if (WHISPER_NATIVE.has(ext)) {
+  // Already compatible and small enough — skip ffmpeg entirely
+  if (WHISPER_NATIVE.has(ext) && blob.size <= WHISPER_MAX_BYTES) {
     return {
       file: new File([blob], originalName, { type: blob.type || "application/octet-stream" }),
       cleanup: async () => {},
