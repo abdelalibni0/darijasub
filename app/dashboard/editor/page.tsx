@@ -246,40 +246,68 @@ export default function EditorPage() {
   // ── Chunking ───────────────────────────────────────────────────────────────
 
   const applyChunking = () => {
-    const result: DisplaySegment[] = [];
-    let newId = 1;
-    for (const seg of segments) {
-      const dur = seg.endSeconds - seg.startSeconds;
-      if (dur <= 0) { result.push({ ...seg, id: newId++ }); continue; }
-      const units: string[] =
-        chunkMode === "words"
-          ? seg.text.trim().split(/\s+/).filter(Boolean)
-          : Array.from({ length: Math.ceil(seg.text.trim().length / chunkSize) }, (_, i) =>
-              seg.text.trim().slice(i * chunkSize, (i + 1) * chunkSize).trim()
-            ).filter(Boolean);
-      if (!units.length) { result.push({ ...seg, id: newId++ }); continue; }
-      const chunks: string[] =
-        chunkMode === "words"
-          ? Array.from({ length: Math.ceil(units.length / chunkSize) }, (_, i) =>
-              units.slice(i * chunkSize, (i + 1) * chunkSize).join(" ")
-            )
-          : units;
-      if (chunks.length === 1) { result.push({ ...seg, id: newId++ }); continue; }
-      const counts = chunks.map((c) =>
-        chunkMode === "words" ? c.split(/\s+/).length : c.length
-      );
-      const total = counts.reduce((a, b) => a + b, 0);
-      let elapsed = seg.startSeconds;
-      for (let i = 0; i < chunks.length; i++) {
-        const end = i === chunks.length - 1
-          ? seg.endSeconds
-          : elapsed + dur * (counts[i] / total);
-        result.push(toDisplay({ id: newId, index: newId, startSeconds: elapsed, endSeconds: end, text: chunks[i] }));
-        newId++;
-        elapsed = end;
+    if (!segments.length) return;
+
+    if (chunkMode === "words") {
+      // Pool ALL words across ALL segments, then redistribute into chunkSize-word groups.
+      // This means chunkSize=3 will merge short segments together if needed, making
+      // every chunk size produce a visible result regardless of individual segment length.
+      const wordItems: { word: string; start: number; end: number }[] = [];
+      for (const seg of segments) {
+        const words = seg.text.trim().split(/\s+/).filter(Boolean);
+        if (!words.length) continue;
+        const dur = seg.endSeconds - seg.startSeconds;
+        for (let i = 0; i < words.length; i++) {
+          wordItems.push({
+            word:  words[i],
+            start: seg.startSeconds + (i / words.length) * dur,
+            end:   seg.startSeconds + ((i + 1) / words.length) * dur,
+          });
+        }
       }
+      if (!wordItems.length) return;
+
+      const result: DisplaySegment[] = [];
+      let newId = 1;
+      for (let i = 0; i < wordItems.length; i += chunkSize) {
+        const chunk = wordItems.slice(i, i + chunkSize);
+        result.push(toDisplay({
+          id: newId, index: newId,
+          startSeconds: chunk[0].start,
+          endSeconds:   chunk[chunk.length - 1].end,
+          text:         chunk.map((w) => w.word).join(" "),
+        }));
+        newId++;
+      }
+      setSegments(result);
+
+    } else {
+      // Chars mode: split within each segment by character count.
+      const result: DisplaySegment[] = [];
+      let newId = 1;
+      for (const seg of segments) {
+        const dur = seg.endSeconds - seg.startSeconds;
+        if (dur <= 0) { result.push({ ...seg, id: newId++ }); continue; }
+        const text = seg.text.trim();
+        const units = Array.from(
+          { length: Math.ceil(text.length / chunkSize) },
+          (_, i) => text.slice(i * chunkSize, (i + 1) * chunkSize).trim()
+        ).filter(Boolean);
+        if (units.length <= 1) { result.push({ ...seg, id: newId++ }); continue; }
+        const total = units.reduce((a, u) => a + u.length, 0);
+        let elapsed = seg.startSeconds;
+        for (let i = 0; i < units.length; i++) {
+          const end = i === units.length - 1
+            ? seg.endSeconds
+            : elapsed + dur * (units[i].length / total);
+          result.push(toDisplay({ id: newId, index: newId, startSeconds: elapsed, endSeconds: end, text: units[i] }));
+          newId++;
+          elapsed = end;
+        }
+      }
+      setSegments(result);
     }
-    setSegments(result);
+
     setChunkOpen(false);
   };
 
@@ -843,7 +871,10 @@ function StylePanel({
 
           {/* Background color + opacity */}
           <div className="mb-3">
-            <ColorRow label="Background" color={style.bgColor} onChange={(c) => set("bgColor", c)} />
+            <ColorRow label="Background" color={style.bgColor} onChange={(c) => {
+              // Auto-enable opacity so the color change is immediately visible
+              onChange({ ...style, bgColor: c, bgOpacity: style.bgOpacity === 0 ? 60 : style.bgOpacity });
+            }} />
             <div className="mt-2">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-white/30 text-xs">Opacity</span>
@@ -858,7 +889,10 @@ function StylePanel({
 
           {/* Stroke color + width */}
           <div>
-            <ColorRow label="Outline" color={style.strokeColor} onChange={(c) => set("strokeColor", c)} />
+            <ColorRow label="Outline" color={style.strokeColor} onChange={(c) => {
+              // Auto-enable width so the color change is immediately visible
+              onChange({ ...style, strokeColor: c, strokeWidth: style.strokeWidth === 0 ? 2 : style.strokeWidth });
+            }} />
             <div className="mt-2">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-white/30 text-xs">Width</span>
