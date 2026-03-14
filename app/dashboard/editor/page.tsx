@@ -1370,21 +1370,19 @@ function VideoExportModal({
 }) {
   const [platform, setPlatform] = useState("youtube");
   const [quality, setQuality]   = useState("medium");
-  const [phase, setPhase]       = useState<"idle" | "loading" | "processing" | "done" | "error">("idle");
+  const [phase, setPhase]       = useState<"idle" | "uploading" | "processing" | "done" | "error">("idle");
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState("");
   const [error, setError]       = useState<string | null>(null);
 
   const backdropRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ffmpegRef   = useRef<any>(null);
 
   const isAudioOnly = rawFilename
     ? AUDIO_EXTENSIONS.some(ext => rawFilename.toLowerCase().endsWith(ext))
     : false;
 
   const plat = EXPORT_PLATFORMS.find(p => p.id === platform)!;
-  const busy = phase === "loading" || phase === "processing";
+  const busy = phase === "uploading" || phase === "processing";
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
@@ -1395,7 +1393,6 @@ function VideoExportModal({
   const handleExport = async () => {
     if (!audioUrl) { setError("No video source available."); return; }
 
-    const qual = EXPORT_QUALITIES.find(q => q.id === quality)!;
     const scale = QUALITY_SCALE[quality] ?? 1;
     let outW = Math.round(plat.w * scale);
     let outH = Math.round(plat.h * scale);
@@ -1406,95 +1403,78 @@ function VideoExportModal({
     setProgress(0);
 
     try {
-      // ── 1. Load engine ───────────────────────────────────────────────────
-      setPhase("loading");
-      setStatusText("Loading video engine…");
-      setProgress(2);
+      // ── 1. Fetch source video ────────────────────────────────────────────
+      setPhase("uploading");
+      setStatusText("Fetching video…");
+      setProgress(5);
 
-      if (!ffmpegRef.current) {
-        const { FFmpeg } = await import("@ffmpeg/ffmpeg");
-        const { toBlobURL } = await import("@ffmpeg/util");
-        const ffmpeg = new FFmpeg();
-        const BASE = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
-        await ffmpeg.load({
-          coreURL: await toBlobURL(`${BASE}/ffmpeg-core.js`,   "text/javascript"),
-          wasmURL: await toBlobURL(`${BASE}/ffmpeg-core.wasm`, "application/wasm"),
-        });
-        ffmpegRef.current = ffmpeg;
+      const videoBlob = await fetch(audioUrl).then(r => r.blob());
+      const filename  = rawFilename ?? "video.mp4";
+
+      // ── 2. Get signed upload URL ─────────────────────────────────────────
+      setStatusText("Preparing upload…");
+      setProgress(10);
+
+      const urlRes = await fetch("/api/upload-export-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, mimeType: videoBlob.type }),
+      });
+      if (!urlRes.ok) {
+        const e = await urlRes.json().catch(() => ({}));
+        throw new Error(e.error ?? "Failed to get upload URL");
       }
+      const { signedUrl, storagePath } = await urlRes.json();
 
-      const ffmpeg = ffmpegRef.current;
-
-      // ── 2. Prepare ───────────────────────────────────────────────────────
-      setPhase("processing");
-      setStatusText("Loading video file…");
-      setProgress(8);
-
-      const { fetchFile } = await import("@ffmpeg/util");
-
-      const progressHandler = ({ progress: p }: { progress: number }) => {
-        if (Number.isFinite(p) && p >= 0) {
-          setProgress(15 + Math.round(p * 80));
-          setStatusText(`Encoding… ${Math.round(p * 100)}%`);
-        }
-      };
-      ffmpeg.on("progress", progressHandler);
-
-      const assContent = generateASS(segments, style, outW, outH);
-      await ffmpeg.writeFile("input.mp4", await fetchFile(audioUrl));
-      await ffmpeg.writeFile("subtitles.ass", new TextEncoder().encode(assContent));
-
-      // ── 3. Encode ────────────────────────────────────────────────────────
-      setStatusText("Burning subtitles…");
+      // ── 3. Upload to Supabase ────────────────────────────────────────────
+      setStatusText("Uploading video…");
       setProgress(15);
 
-      const vf =
-        `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,` +
-        `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,` +
-        `ass=subtitles.ass`;
+      const uploadRes = await fetch(signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": videoBlob.type || "application/octet-stream" },
+        body: videoBlob,
+      });
+      if (!uploadRes.ok) throw new Error("Failed to upload video to storage");
 
-      await ffmpeg.exec([
-        "-i",        "input.mp4",
-        "-vf",       vf,
-        "-c:v",      "libx264",
-        "-crf",      String(qual.crf),
-        "-preset",   "ultrafast",
-        "-c:a",      "aac",
-        "-b:a",      "128k",
-        "-movflags", "+faststart",
-        "output.mp4",
-      ]);
+      // ── 4. Process on server ─────────────────────────────────────────────
+      setPhase("processing");
+      setStatusText("Burning subtitles…");
+      setProgress(50);
 
-      ffmpeg.off("progress", progressHandler);
+      const assContent = generateASS(segments, style, outW, outH);
 
-      // ── 4. Download ──────────────────────────────────────────────────────
+      const exportRes = await fetch("/api/export-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storagePath, assContent, platform, quality }),
+      });
+
+      if (!exportRes.ok) {
+        const e = await exportRes.json().catch(() => ({}));
+        throw new Error(e.error ?? "Server export failed");
+      }
+
+      // ── 5. Download result ───────────────────────────────────────────────
       setStatusText("Preparing download…");
       setProgress(97);
 
-      const data = await ffmpeg.readFile("output.mp4") as Uint8Array;
-      const ab = new ArrayBuffer(data.byteLength);
-      new Uint8Array(ab).set(data);
-      const blob = new Blob([ab], { type: "video/mp4" });
-      const dlUrl = URL.createObjectURL(blob);
+      const outBlob = await exportRes.blob();
+      const dlUrl   = URL.createObjectURL(outBlob);
 
       const a = document.createElement("a");
       a.href = dlUrl;
-      a.download = `${(rawFilename ?? "video").replace(/\.[^/.]+$/, "")}_${platform}_${quality}.mp4`;
+      a.download = `${filename.replace(/\.[^/.]+$/, "")}_${platform}_${quality}.mp4`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(dlUrl), 2000);
 
-      // Cleanup FFmpeg FS
-      for (const f of ["input.mp4", "subtitles.ass", "output.mp4"]) {
-        try { await ffmpeg.deleteFile(f); } catch { /* ignore */ }
-      }
-
       setProgress(100);
       setStatusText("Download started!");
       setPhase("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Export failed. Check the browser console for details.");
+      setError(err instanceof Error ? err.message : "Export failed.");
       setPhase("error");
     }
   };
@@ -1678,7 +1658,7 @@ function VideoExportModal({
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  {phase === "loading" ? "Loading engine…" : "Processing…"}
+                  {phase === "uploading" ? "Uploading…" : "Processing…"}
                 </>
               ) : (
                 <>
