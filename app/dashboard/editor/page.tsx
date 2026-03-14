@@ -127,6 +127,12 @@ export default function EditorPage() {
   const [videoStoragePath, setVideoStoragePath]   = useState<string | null>(null);
   const [videoUploadReady, setVideoUploadReady]   = useState(false);
 
+  // Arabizi / Arabic script toggle
+  const [scriptMode, setScriptMode]               = useState<"arabic" | "arabizi">("arabic");
+  const [arabiziConverting, setArabiziConverting] = useState(false);
+  // Map of segment id → original Arabic text, so toggling back is free
+  const arabicOriginalRef = useRef<Map<number, string>>(new Map());
+
   const audioRef       = useRef<HTMLAudioElement>(null);
   const segRefs        = useRef<Map<number, HTMLDivElement>>(new Map());
   const userSeekingRef = useRef(false);
@@ -297,6 +303,61 @@ export default function EditorPage() {
   const exportSrt = () => downloadText(segmentsToSrt(segments), `${filename}.srt`);
   const exportVtt = () => downloadText(segmentsToVtt(segments), `${filename}.vtt`);
 
+  // ── Arabizi toggle ─────────────────────────────────────────────────────────
+
+  const toggleScript = async () => {
+    if (arabiziConverting || segments.length === 0) return;
+
+    if (scriptMode === "arabizi") {
+      // Restore originals immediately — no API needed
+      setSegments((prev) =>
+        prev.map((s) => {
+          const orig = arabicOriginalRef.current.get(s.id);
+          return orig !== undefined ? { ...s, text: orig } : s;
+        })
+      );
+      setScriptMode("arabic");
+      return;
+    }
+
+    // Convert arabic → arabizi
+    setArabiziConverting(true);
+    try {
+      const SEPARATOR = "|||";
+      const texts = segments.map((s) => s.text);
+      const joined = texts.join(SEPARATOR);
+
+      const res = await fetch("/api/arabizi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: joined, direction: "to_arabizi" }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(err.error ?? "Arabizi conversion failed");
+      }
+
+      const { result } = await res.json() as { result: string };
+      const converted = result.split(SEPARATOR);
+
+      // Save originals and apply converted texts
+      const origMap = arabicOriginalRef.current;
+      setSegments((prev) =>
+        prev.map((s, i) => {
+          origMap.set(s.id, s.text);
+          const newText = converted[i]?.trim();
+          return newText ? { ...s, text: newText } : s;
+        })
+      );
+      setScriptMode("arabizi");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Arabizi conversion failed");
+    } finally {
+      setArabiziConverting(false);
+    }
+  };
+
   // ── Loading / not found states ─────────────────────────────────────────────
 
   if (!loaded) {
@@ -343,6 +404,17 @@ export default function EditorPage() {
           <span className="text-xs text-white/30 bg-white/5 px-2 py-0.5 rounded-full border border-white/10 shrink-0">
             {segments.length} segments
           </span>
+          {scriptMode === "arabizi" ? (
+            <span className="text-xs px-2 py-0.5 rounded-full border shrink-0"
+              style={{ background: "rgba(147,51,234,0.2)", borderColor: "rgba(168,85,247,0.4)", color: "#d8b4fe" }}>
+              Arabizi
+            </span>
+          ) : (
+            <span className="text-xs px-2 py-0.5 rounded-full border shrink-0"
+              style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.35)" }}>
+              العربية
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0 ml-3">
@@ -403,6 +475,27 @@ export default function EditorPage() {
               </div>
             )}
           </div>
+
+          {/* Arabizi toggle button */}
+          <button type="button" onClick={toggleScript} disabled={arabiziConverting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            style={{
+              background: scriptMode === "arabizi" ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.04)",
+              borderColor: scriptMode === "arabizi" ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
+              color: scriptMode === "arabizi" ? "#d8b4fe" : "rgba(255,255,255,0.65)",
+              opacity: arabiziConverting ? 0.6 : 1,
+              cursor: arabiziConverting ? "not-allowed" : "pointer",
+            }}>
+            {arabiziConverting ? (
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <span className="font-semibold" style={{ fontFamily: "serif", letterSpacing: "0.02em" }}>ع / A</span>
+            )}
+            <span className="hidden sm:inline">{arabiziConverting ? "Converting…" : scriptMode === "arabizi" ? "Arabizi" : "Script"}</span>
+          </button>
 
           {/* AI Captions button */}
           <button type="button" onClick={() => setCaptionsOpen(true)}
