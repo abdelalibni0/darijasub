@@ -151,6 +151,9 @@ export default function EditorPage() {
   // AI Captions modal
   const [captionsOpen, setCaptionsOpen] = useState(false);
 
+  // Multi-language export modal
+  const [multiExportOpen, setMultiExportOpen] = useState(false);
+
   // Video export modal
   const [videoExportOpen, setVideoExportOpen]     = useState(false);
   const [rawFilename, setRawFilename]             = useState<string | null>(null);
@@ -551,6 +554,16 @@ export default function EditorPage() {
               Export Video
             </button>
 
+            {/* Multi Export */}
+            <button type="button" onClick={() => setMultiExportOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+              style={{ background: "rgba(147,51,234,0.15)", borderColor: "rgba(168,85,247,0.4)", color: "#d8b4fe" }}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+              </svg>
+              Multi Export
+            </button>
+
             {/* SRT */}
             <button type="button" onClick={exportSrt}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all text-white/70 hover:text-white border border-white/10 hover:border-white/25"
@@ -750,6 +763,15 @@ export default function EditorPage() {
           videoStoragePath={videoStoragePath}
           videoUploadReady={videoUploadReady}
           onClose={() => setVideoExportOpen(false)}
+        />
+      )}
+
+      {/* ── Multi Export modal ──────────────────────────────────────────────── */}
+      {multiExportOpen && (
+        <MultiExportModal
+          segments={segments}
+          filename={filename}
+          onClose={() => setMultiExportOpen(false)}
         />
       )}
 
@@ -2287,6 +2309,260 @@ function VideoExportModal({
               </button>
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MultiExportModal ────────────────────────────────────────────────────────────
+
+const MULTI_EXPORT_LANGUAGES = [
+  { value: "fr",        flag: "🇫🇷", label: "French" },
+  { value: "en",        flag: "🇬🇧", label: "English" },
+  { value: "es",        flag: "🇪🇸", label: "Spanish" },
+  { value: "de",        flag: "🇩🇪", label: "German" },
+  { value: "msa",       flag: "🇸🇦", label: "Arabic (MSA)" },
+  { value: "darija-ma", flag: "🇲🇦", label: "Moroccan Darija" },
+  { value: "darija-dz", flag: "🇩🇿", label: "Algerian Darija" },
+  { value: "it",        flag: "🇮🇹", label: "Italian" },
+  { value: "nl",        flag: "🇳🇱", label: "Dutch" },
+  { value: "pt",        flag: "🇵🇹", label: "Portuguese" },
+  { value: "ru",        flag: "🇷🇺", label: "Russian" },
+  { value: "tr",        flag: "🇹🇷", label: "Turkish" },
+];
+
+const MAX_LANGUAGES = 6;
+
+/** seconds → "HH:MM:SS,mmm" for SRT */
+function toSrtTime(sec: number): string {
+  const n  = Math.max(0, sec);
+  const h  = Math.floor(n / 3600);
+  const m  = Math.floor((n % 3600) / 60);
+  const s  = Math.floor(n % 60);
+  const ms = Math.round((n % 1) * 1000);
+  return (
+    String(h).padStart(2, "0") + ":" +
+    String(m).padStart(2, "0") + ":" +
+    String(s).padStart(2, "0") + "," +
+    String(ms).padStart(3, "0")
+  );
+}
+
+function buildSrt(segments: { start: number; end: number; text: string }[]): string {
+  return segments
+    .map((seg, i) => `${i + 1}\n${toSrtTime(seg.start)} --> ${toSrtTime(seg.end)}\n${seg.text}`)
+    .join("\n\n") + "\n";
+}
+
+function MultiExportModal({
+  segments,
+  filename,
+  onClose,
+}: {
+  segments: DisplaySegment[];
+  filename: string;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set(["fr", "en"]));
+  const [phase, setPhase]       = useState<"idle" | "translating" | "done" | "error">("idle");
+  const [statusText, setStatusText] = useState("");
+  const [error, setError]       = useState<string | null>(null);
+
+  const busy = phase === "translating";
+
+  // Close on Escape
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose, busy]);
+
+  // Close on backdrop click
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  const toggleLang = (value: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) {
+        next.delete(value);
+      } else {
+        if (next.size >= MAX_LANGUAGES) return prev; // enforce limit
+        next.add(value);
+      }
+      return next;
+    });
+  };
+
+  const handleExport = async () => {
+    if (selected.size === 0) return;
+    setPhase("translating");
+    setError(null);
+
+    const langs     = Array.from(selected);
+    const srcLang   = typeof window !== "undefined"
+      ? (localStorage.getItem("darijasub_detected_language") ?? "unknown")
+      : "unknown";
+
+    setStatusText(`Translating to ${langs.length} language${langs.length > 1 ? "s" : ""}…`);
+
+    try {
+      const apiSegments = segments.map((s) => ({ start: s.startSeconds, end: s.endSeconds, text: s.text }));
+
+      const res = await fetch("/api/multi-export", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ segments: apiSegments, languages: langs, sourceLanguage: srcLang }),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error((j as { error?: string }).error ?? `Server error ${res.status}`);
+      }
+
+      const { results } = await res.json() as {
+        results: { language: string; languageName: string; segments: { start: number; end: number; text: string }[] }[];
+      };
+
+      setStatusText("Building ZIP…");
+
+      // Dynamic import of JSZip (client only)
+      const JSZip = (await import("jszip")).default;
+      const zip   = new JSZip();
+
+      // Combined reference file
+      let combined = "";
+
+      for (const r of results) {
+        const srtContent = buildSrt(r.segments);
+        const safeName   = r.languageName.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+        zip.file(`subtitles_${safeName}.srt`, srtContent);
+        combined += `=== ${r.languageName.toUpperCase()} ===\n\n${srtContent}\n\n`;
+      }
+
+      zip.file("subtitles_all.txt", combined.trim());
+
+      const blob    = await zip.generateAsync({ type: "blob" });
+      const url     = URL.createObjectURL(blob);
+      const a       = document.createElement("a");
+      a.href        = url;
+      a.download    = `darijasub_subtitles_${filename || "export"}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      setPhase("done");
+      setStatusText(`✅ Downloaded ${results.length} language${results.length > 1 ? "s" : ""} as ZIP`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Export failed");
+      setPhase("error");
+    }
+  };
+
+  return (
+    <div ref={backdropRef}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+      onMouseDown={(e) => { if (e.target === backdropRef.current && !busy) onClose(); }}>
+
+      <div className="w-full max-w-lg rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
+        style={{ background: "linear-gradient(160deg,#1a0a2e 0%,#0f0619 100%)" }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
+          <div>
+            <h2 className="text-base font-bold text-white">Export in Multiple Languages</h2>
+            <p className="text-xs text-white/40 mt-0.5">
+              Translate &amp; download all as a ZIP file
+            </p>
+          </div>
+          <button type="button" onClick={onClose} disabled={busy}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-white/30 hover:text-white/80 transition-colors disabled:opacity-40">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-5">
+
+          {/* Language grid */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">Select Languages</p>
+              <span className="text-xs text-white/30">{selected.size}/{MAX_LANGUAGES} selected</span>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {MULTI_EXPORT_LANGUAGES.map((lang) => {
+                const checked  = selected.has(lang.value);
+                const disabled = !checked && selected.size >= MAX_LANGUAGES;
+                return (
+                  <button key={lang.value} type="button"
+                    onClick={() => toggleLang(lang.value)}
+                    disabled={disabled || busy}
+                    className="flex flex-col items-center gap-1 px-2 py-2.5 rounded-xl border text-center transition-all"
+                    style={{
+                      background:   checked ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.03)",
+                      borderColor:  checked ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.08)",
+                      opacity:      (disabled || busy) ? 0.4 : 1,
+                      cursor:       (disabled || busy) ? "not-allowed" : "pointer",
+                    }}>
+                    <span className="text-xl leading-none">{lang.flag}</span>
+                    <span className="text-xs leading-tight"
+                      style={{ color: checked ? "#d8b4fe" : "rgba(255,255,255,0.5)" }}>
+                      {lang.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-white/25 mt-2">Max {MAX_LANGUAGES} languages at once. Claude translates all in parallel.</p>
+          </div>
+
+          {/* Progress / status */}
+          {phase === "translating" && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl"
+              style={{ background: "rgba(147,51,234,0.1)", border: "1px solid rgba(168,85,247,0.2)" }}>
+              <svg className="w-4 h-4 animate-spin shrink-0 text-purple-400" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+              <span className="text-sm text-purple-300">{statusText}</span>
+            </div>
+          )}
+
+          {phase === "done" && (
+            <div className="px-4 py-3 rounded-xl text-sm font-medium"
+              style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.25)", color: "#86efac" }}>
+              {statusText}
+            </div>
+          )}
+
+          {phase === "error" && error && (
+            <div className="px-4 py-3 rounded-xl text-sm"
+              style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5" }}>
+              {error}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={onClose} disabled={busy}
+              className="flex-1 py-2.5 rounded-xl font-semibold text-sm text-white/70 hover:text-white border border-white/10 transition-all disabled:opacity-40"
+              style={{ background: "rgba(255,255,255,0.04)" }}>
+              {phase === "done" ? "Close" : "Cancel"}
+            </button>
+
+            {phase !== "done" && (
+              <button type="button" onClick={handleExport}
+                disabled={busy || selected.size === 0}
+                className="flex-1 py-2.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff",
+                  boxShadow: busy ? "none" : "0 4px 14px rgba(124,58,237,0.35)" }}>
+                {busy ? "Translating…" : `Export ${selected.size} Language${selected.size !== 1 ? "s" : ""} as ZIP`}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
