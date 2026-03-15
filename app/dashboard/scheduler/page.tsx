@@ -32,14 +32,23 @@ function formatDate(iso: string) {
   );
 }
 
+// ── VAPID helper ────────────────────────────────────────────────────────────────
+function urlBase64ToUint8Array(base64: string): Uint8Array {
+  const pad = "=".repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
 export default function SchedulerPage() {
-  const [posts,      setPosts]      = useState<ScheduledPost[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState<string | null>(null);
-  const [modalOpen,  setModalOpen]  = useState(false);
-  const [deleting,   setDeleting]   = useState<string | null>(null);
-  const [publishing, setPublishing] = useState<string | null>(null);
-  const [toasts,     setToasts]     = useState<Toast[]>([]);
+  const [posts,       setPosts]       = useState<ScheduledPost[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState<string | null>(null);
+  const [modalOpen,   setModalOpen]   = useState(false);
+  const [deleting,    setDeleting]    = useState<string | null>(null);
+  const [publishing,  setPublishing]  = useState<string | null>(null);
+  const [toasts,      setToasts]      = useState<Toast[]>([]);
+  const [notifState,  setNotifState]  = useState<"idle" | "requesting" | "enabled" | "denied" | "unsupported">("idle");
 
   const addToast = useCallback((message: string) => {
     const id = Date.now();
@@ -66,6 +75,68 @@ export default function SchedulerPage() {
   };
 
   useEffect(() => { fetchPosts(); }, []);
+
+  // Detect existing notification permission on mount
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setNotifState("unsupported");
+    } else if (Notification.permission === "granted") {
+      setNotifState("enabled");
+    } else if (Notification.permission === "denied") {
+      setNotifState("denied");
+    }
+  }, []);
+
+  const enableNotifications = async () => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setNotifState("unsupported");
+      addToast("Push notifications are not supported in this browser.");
+      return;
+    }
+    const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    if (!vapidKey) {
+      addToast("Push notifications are not configured yet (missing VAPID key).");
+      return;
+    }
+
+    setNotifState("requesting");
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setNotifState("denied");
+        addToast("Notification permission denied.");
+        return;
+      }
+
+      // Register service worker
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+
+      // Subscribe to push
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly:      true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey),
+      });
+
+      const json = sub.toJSON();
+      const res  = await fetch("/api/scheduler/push-subscribe", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          endpoint: sub.endpoint,
+          keys:     { p256dh: json.keys?.p256dh, auth: json.keys?.auth },
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to save subscription");
+      setNotifState("enabled");
+      addToast("🔔 Notifications enabled! You'll be reminded 35 min before each post.");
+    } catch (err) {
+      console.error("Push subscription error:", err);
+      setNotifState("idle");
+      addToast("Failed to enable notifications. Please try again.");
+    }
+  };
 
   const deletePost = async (id: string) => {
     setDeleting(id);
@@ -167,26 +238,67 @@ export default function SchedulerPage() {
       </div>
 
       {/* Page header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-8 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">📅 Social Media Scheduler</h1>
           <p className="text-sm text-white/40 mt-1">Plan and schedule your subtitle videos across platforms</p>
         </div>
-        <button
-          type="button"
-          onClick={() => setModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all"
-          style={{
-            background: "linear-gradient(90deg,#7c3aed,#9333ea)",
-            color:      "#fff",
-            boxShadow:  "0 4px 14px rgba(124,58,237,0.35)",
-          }}
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          New Scheduled Post
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Notification toggle */}
+          {notifState !== "unsupported" && (
+            <button
+              type="button"
+              onClick={notifState === "enabled" ? undefined : enableNotifications}
+              disabled={notifState === "requesting" || notifState === "denied"}
+              className="flex items-center gap-2 px-3 py-2.5 rounded-xl font-semibold text-sm transition-all border disabled:opacity-50 disabled:cursor-not-allowed"
+              style={
+                notifState === "enabled"
+                  ? { background: "rgba(34,197,94,0.12)", borderColor: "rgba(34,197,94,0.3)", color: "#86efac", cursor: "default" }
+                  : notifState === "denied"
+                  ? { background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.2)", color: "rgba(252,165,165,0.6)" }
+                  : { background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.6)" }
+              }
+              title={
+                notifState === "denied"
+                  ? "Notifications blocked — allow in browser settings"
+                  : notifState === "enabled"
+                  ? "Push notifications enabled"
+                  : "Enable push notifications"
+              }
+            >
+              {notifState === "requesting" ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+              )}
+              {notifState === "enabled"   ? "Notifications ✅"  :
+               notifState === "denied"    ? "Notifications blocked" :
+               notifState === "requesting"? "Enabling…"         : "🔔 Enable Notifications"}
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all"
+            style={{
+              background: "linear-gradient(90deg,#7c3aed,#9333ea)",
+              color:      "#fff",
+              boxShadow:  "0 4px 14px rgba(124,58,237,0.35)",
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New Scheduled Post
+          </button>
+        </div>
       </div>
 
       {/* Loading */}

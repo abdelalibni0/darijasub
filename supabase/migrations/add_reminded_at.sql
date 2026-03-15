@@ -1,0 +1,1 @@
+ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
