@@ -104,6 +104,50 @@ export function parseSrt(srtText: string): EditorSegment[] {
   return segments;
 }
 
+/** Parse WebVTT text → EditorSegment[] */
+export function parseVtt(vttText: string): EditorSegment[] {
+  const normalized = vttText.replace(/\r\n/g, "\n").trim();
+  // Strip the WEBVTT header block (everything before the first blank line that
+  // precedes a cue), then split into blocks.
+  const bodyStart = normalized.indexOf("\n\n");
+  const body      = bodyStart === -1 ? normalized : normalized.slice(bodyStart);
+  const blocks    = body.trim().split(/\n{2,}/);
+  const segments: EditorSegment[] = [];
+  let seq = 1;
+
+  for (const block of blocks) {
+    const lines = block.trim().split("\n");
+    if (!lines.length) continue;
+
+    // Each cue may optionally start with an identifier line (non-timestamp).
+    // Find the line that contains "-->".
+    let timeLine = "";
+    let textStart = 1;
+    if (lines[0].includes("-->")) {
+      timeLine  = lines[0];
+      textStart = 1;
+    } else if (lines.length >= 2 && lines[1].includes("-->")) {
+      timeLine  = lines[1];
+      textStart = 2;
+    } else {
+      continue; // not a cue block
+    }
+
+    const arrowIdx = timeLine.indexOf("-->");
+    if (arrowIdx === -1) continue;
+    // Strip optional cue settings after the end timestamp (e.g. "align:start")
+    const endRaw  = timeLine.slice(arrowIdx + 3).trim().split(/\s+/)[0];
+    const startSeconds = srtTimeToSeconds(timeLine.slice(0, arrowIdx).trim());
+    const endSeconds   = srtTimeToSeconds(endRaw);
+    const text         = lines.slice(textStart).join("\n").trim();
+    if (!text) continue;
+
+    segments.push({ id: seq, index: seq, startSeconds, endSeconds, text });
+    seq++;
+  }
+  return segments;
+}
+
 // ── Exporters ──────────────────────────────────────────────────────────────────
 
 export function segmentsToSrt(segments: EditorSegment[]): string {
