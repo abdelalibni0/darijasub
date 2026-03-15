@@ -14,6 +14,11 @@ export async function POST(request: NextRequest) {
     if (!name?.trim()) return NextResponse.json({ error: "name is required" }, { status: 400 });
     if (!file)         return NextResponse.json({ error: "audio file is required" }, { status: 400 });
 
+    const allowed = ["audio/mpeg", "audio/wav", "audio/mp4", "audio/x-m4a", "audio/m4a"];
+    if (file.type && !allowed.includes(file.type)) {
+      return NextResponse.json({ error: "Only MP3, WAV, and M4A files are supported" }, { status: 400 });
+    }
+
     // ElevenLabs expects multipart/form-data with "name" and "files" fields
     const elevenForm = new FormData();
     elevenForm.append("name", name.trim());

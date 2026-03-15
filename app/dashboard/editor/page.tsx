@@ -3004,7 +3004,7 @@ function VoiceoverModal({
                 {/* File upload */}
                 <div>
                   <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">Audio Sample</p>
-                  <input ref={cloneFileRef} type="file" accept=".mp3,.wav,audio/mpeg,audio/wav"
+                  <input ref={cloneFileRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
                     className="hidden"
                     onChange={(e) => {
                       const f = e.target.files?.[0];
@@ -3026,7 +3026,7 @@ function VoiceoverModal({
                         d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                     </svg>
                     <span className="text-xs" style={{ color: cloneFile ? "#c4b5fd" : "rgba(255,255,255,0.4)" }}>
-                      {cloneFile ? cloneFile.name : "Click to upload MP3 or WAV (max 10 MB)"}
+                      {cloneFile ? cloneFile.name : "Click to upload MP3, WAV, or M4A (max 10 MB)"}
                     </span>
                     {cloneFile && (
                       <span className="text-[11px]" style={{ color: "rgba(255,255,255,0.25)" }}>
