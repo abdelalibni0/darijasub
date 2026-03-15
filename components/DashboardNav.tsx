@@ -9,6 +9,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: "⊞" },
   { href: "/dashboard/projects", label: "Projects", icon: "🎬" },
   { href: "/dashboard/editor", label: "Editor", icon: "✂️" },
+  { href: "/dashboard/scheduler", label: "Scheduler", icon: "📅" },
   { href: "/dashboard/settings", label: "Settings", icon: "⚙️" },
 ];
 

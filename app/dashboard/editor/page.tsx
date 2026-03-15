@@ -14,6 +14,7 @@ import {
   type EditorSegment,
 } from "@/lib/srt-parse";
 import { LANGUAGES, type Language } from "@/lib/languages";
+import SchedulerModal from "@/components/SchedulerModal";
 
 // ── SubStyle ───────────────────────────────────────────────────────────────────
 
@@ -159,7 +160,8 @@ export default function EditorPage() {
   const [voiceoverOpen, setVoiceoverOpen] = useState(false);
 
   // Auto-chapters modal
-  const [chaptersOpen, setChaptersOpen] = useState(false);
+  const [chaptersOpen, setChaptersOpen]   = useState(false);
+  const [schedulerOpen, setSchedulerOpen] = useState(false);
 
   // Video export modal
   const [videoExportOpen, setVideoExportOpen]     = useState(false);
@@ -649,6 +651,18 @@ export default function EditorPage() {
               </svg>
               VTT
             </button>
+
+            <div className="w-px h-4 mx-1" style={{ background: "rgba(255,255,255,0.1)" }} />
+
+            {/* Schedule */}
+            <button type="button" onClick={() => setSchedulerOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+              style={{ background: "rgba(59,130,246,0.12)", borderColor: "rgba(59,130,246,0.35)", color: "#93c5fd" }}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              Schedule
+            </button>
           </div>
         </div>
 
@@ -875,6 +889,14 @@ export default function EditorPage() {
           segments={segments}
           filename={filename}
           onClose={() => setChaptersOpen(false)}
+        />
+      )}
+
+      {/* ── Scheduler modal ──────────────────────────────────────────────────── */}
+      {schedulerOpen && (
+        <SchedulerModal
+          onClose={() => setSchedulerOpen(false)}
+          initialCaption={segments.map((s) => s.text).join(" ")}
         />
       )}
 
