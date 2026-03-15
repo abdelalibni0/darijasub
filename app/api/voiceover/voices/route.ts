@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 export async function GET() {
   try {
     const apiKey = process.env.ELEVENLABS_API_KEY;
+    console.log("[voiceover/voices] API key present:", !!apiKey);
     if (!apiKey) return NextResponse.json({ error: "ElevenLabs API key not configured" }, { status: 500 });
 
     const res = await fetch("https://api.elevenlabs.io/v1/voices", {

@@ -10,6 +10,7 @@ export async function POST(request: NextRequest) {
     if (!voiceId?.trim()) return NextResponse.json({ error: "voiceId is required" }, { status: 400 });
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
+    console.log("[voiceover] API key present:", !!apiKey);
     if (!apiKey) return NextResponse.json({ error: "ElevenLabs API key not configured" }, { status: 500 });
 
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
