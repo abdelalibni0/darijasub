@@ -2679,6 +2679,7 @@ interface ElevenLabsVoice {
   name:        string;
   preview_url: string;
   labels:      Record<string, string>;
+  category?:   string;
 }
 
 function VoiceoverModal({
@@ -2700,6 +2701,14 @@ function VoiceoverModal({
   const [playingPreview, setPlayingPreview] = useState<string | null>(null);
   const backdropRef                   = useRef<HTMLDivElement>(null);
   const busy                          = phase === "generating";
+
+  // Clone tab state
+  const [tab, setTab]               = useState<"select" | "clone">("select");
+  const [cloneFile, setCloneFile]   = useState<File | null>(null);
+  const [cloneName, setCloneName]   = useState("");
+  const [clonePhase, setClonePhase] = useState<"idle" | "cloning" | "done" | "error">("idle");
+  const [cloneError, setCloneError] = useState<string | null>(null);
+  const cloneFileRef                = useRef<HTMLInputElement>(null);
 
   // Fetch voices on mount
   useEffect(() => {
@@ -2790,6 +2799,58 @@ function VoiceoverModal({
     setGenError(null);
   };
 
+  const cloneVoice = async () => {
+    if (!cloneFile || !cloneName.trim()) return;
+    setClonePhase("cloning");
+    setCloneError(null);
+    try {
+      const form = new FormData();
+      form.append("name", cloneName.trim());
+      form.append("file", cloneFile);
+      const res = await fetch("/api/voiceover/clone", { method: "POST", body: form });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error ?? `Server error ${res.status}`);
+      }
+      const { voice_id } = await res.json() as { voice_id: string };
+      // Re-fetch voices to get the cloned voice's full details
+      const vRes = await fetch("/api/voiceover/voices");
+      if (vRes.ok) {
+        const { voices: list } = await vRes.json() as { voices: ElevenLabsVoice[] };
+        setVoices(list);
+      }
+      setSelectedVoice(voice_id);
+      setTab("select");
+      setClonePhase("idle");
+      setCloneName("");
+      setCloneFile(null);
+    } catch (err) {
+      setCloneError(err instanceof Error ? err.message : "Cloning failed");
+      setClonePhase("error");
+    }
+  };
+
+  const deleteVoice = async (voiceId: string) => {
+    try {
+      const res = await fetch("/api/voiceover/clone/delete", {
+        method:  "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ voice_id: voiceId }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error ?? `Error ${res.status}`);
+      }
+      setVoices((prev) => prev.filter((v) => v.voice_id !== voiceId));
+      if (selectedVoice === voiceId) {
+        const next = voices.find((v) => v.voice_id !== voiceId);
+        setSelectedVoice(next?.voice_id ?? null);
+      }
+    } catch (err) {
+      console.error("Delete voice failed:", err);
+    }
+  };
+
   return (
     <div ref={backdropRef}
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -2816,78 +2877,213 @@ function VoiceoverModal({
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
 
-          {/* Voice picker */}
+          {/* Voice picker — tabbed */}
           <div>
-            <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-3">Select Voice</p>
+            {/* Tab row */}
+            <div className="flex gap-1 mb-3 p-1 rounded-xl" style={{ background: "rgba(255,255,255,0.04)" }}>
+              {(["select", "clone"] as const).map((t) => (
+                <button key={t} type="button"
+                  onClick={() => setTab(t)}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={{
+                    background:  tab === t ? "rgba(147,51,234,0.35)" : "transparent",
+                    color:       tab === t ? "#e9d5ff" : "rgba(255,255,255,0.45)",
+                    border:      tab === t ? "1px solid rgba(168,85,247,0.4)" : "1px solid transparent",
+                  }}>
+                  {t === "select" ? "Select Voice" : "Clone a Voice"}
+                </button>
+              ))}
+            </div>
 
-            {voicesLoading && (
-              <div className="grid grid-cols-2 gap-2">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="h-16 rounded-xl animate-pulse"
-                    style={{ background: "rgba(255,255,255,0.05)" }} />
-                ))}
-              </div>
-            )}
+            {/* ── SELECT tab ── */}
+            {tab === "select" && (
+              <>
+                {voicesLoading && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className="h-16 rounded-xl animate-pulse"
+                        style={{ background: "rgba(255,255,255,0.05)" }} />
+                    ))}
+                  </div>
+                )}
 
-            {voicesError && (
-              <div className="px-4 py-3 rounded-xl text-sm"
-                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5" }}>
-                {voicesError}
-              </div>
-            )}
+                {voicesError && (
+                  <div className="px-4 py-3 rounded-xl text-sm"
+                    style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5" }}>
+                    {voicesError}
+                  </div>
+                )}
 
-            {!voicesLoading && !voicesError && (
-              <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
-                {voices.map((voice) => {
-                  const active  = selectedVoice === voice.voice_id;
-                  const preview = playingPreview === voice.voice_id;
-                  const accent  = voice.labels?.accent ?? voice.labels?.language ?? "";
-                  const gender  = voice.labels?.gender ?? "";
-                  const desc    = [accent, gender].filter(Boolean).join(" · ");
-                  return (
-                    <div key={voice.voice_id}
-                      onClick={() => setSelectedVoice(voice.voice_id)}
-                      className="flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-all"
-                      style={{
-                        background:  active ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.03)",
-                        borderColor: active ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.08)",
-                      }}>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate"
-                          style={{ color: active ? "#e9d5ff" : "rgba(255,255,255,0.85)" }}>
-                          {voice.name}
-                        </div>
-                        {desc && (
-                          <div className="text-xs mt-0.5 truncate capitalize"
-                            style={{ color: active ? "#c4b5fd" : "rgba(255,255,255,0.35)" }}>
-                            {desc}
-                          </div>
-                        )}
-                      </div>
-                      {voice.preview_url && (
-                        <button type="button"
-                          onClick={(e) => { e.stopPropagation(); playPreview(voice); }}
-                          className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all"
+                {!voicesLoading && !voicesError && (
+                  <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                    {voices.map((voice) => {
+                      const active   = selectedVoice === voice.voice_id;
+                      const preview  = playingPreview === voice.voice_id;
+                      const isCloned = voice.category === "cloned";
+                      const accent   = voice.labels?.accent ?? voice.labels?.language ?? "";
+                      const gender   = voice.labels?.gender ?? "";
+                      const desc     = [accent, gender].filter(Boolean).join(" · ");
+                      return (
+                        <div key={voice.voice_id}
+                          onClick={() => setSelectedVoice(voice.voice_id)}
+                          className="flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all"
                           style={{
-                            background:  preview ? "rgba(168,85,247,0.4)" : "rgba(255,255,255,0.08)",
-                            border:      "1px solid " + (preview ? "rgba(168,85,247,0.6)" : "rgba(255,255,255,0.1)"),
-                            color:       preview ? "#e9d5ff" : "rgba(255,255,255,0.5)",
-                          }}
-                          title={preview ? "Stop preview" : "Play preview"}>
-                          {preview ? (
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                              <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
-                            </svg>
-                          ) : (
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M8 5v14l11-7z" />
-                            </svg>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+                            background:  active ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.03)",
+                            borderColor: active ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.08)",
+                          }}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-medium truncate"
+                                style={{ color: active ? "#e9d5ff" : "rgba(255,255,255,0.85)" }}>
+                                {voice.name}
+                              </span>
+                              {isCloned && (
+                                <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-semibold"
+                                  style={{ background: "rgba(168,85,247,0.2)", color: "#c4b5fd", border: "1px solid rgba(168,85,247,0.3)" }}>
+                                  clone
+                                </span>
+                              )}
+                            </div>
+                            {desc && (
+                              <div className="text-xs mt-0.5 truncate capitalize"
+                                style={{ color: active ? "#c4b5fd" : "rgba(255,255,255,0.35)" }}>
+                                {desc}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {voice.preview_url && (
+                              <button type="button"
+                                onClick={(e) => { e.stopPropagation(); playPreview(voice); }}
+                                className="w-7 h-7 rounded-full flex items-center justify-center transition-all"
+                                style={{
+                                  background:  preview ? "rgba(168,85,247,0.4)" : "rgba(255,255,255,0.08)",
+                                  border:      "1px solid " + (preview ? "rgba(168,85,247,0.6)" : "rgba(255,255,255,0.1)"),
+                                  color:       preview ? "#e9d5ff" : "rgba(255,255,255,0.5)",
+                                }}
+                                title={preview ? "Stop preview" : "Play preview"}>
+                                {preview ? (
+                                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                                    <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
+                                  </svg>
+                                ) : (
+                                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M8 5v14l11-7z" />
+                                  </svg>
+                                )}
+                              </button>
+                            )}
+                            {isCloned && (
+                              <button type="button"
+                                onClick={(e) => { e.stopPropagation(); deleteVoice(voice.voice_id); }}
+                                className="w-7 h-7 rounded-full flex items-center justify-center transition-all"
+                                style={{
+                                  background: "rgba(239,68,68,0.1)",
+                                  border:     "1px solid rgba(239,68,68,0.25)",
+                                  color:      "rgba(252,165,165,0.7)",
+                                }}
+                                title="Delete cloned voice">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── CLONE tab ── */}
+            {tab === "clone" && (
+              <div className="space-y-4">
+                {/* File upload */}
+                <div>
+                  <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">Audio Sample</p>
+                  <input ref={cloneFileRef} type="file" accept=".mp3,.wav,audio/mpeg,audio/wav"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      if (f.size > 10 * 1024 * 1024) { setCloneError("File must be under 10 MB"); return; }
+                      setCloneFile(f);
+                      setCloneError(null);
+                    }} />
+                  <button type="button"
+                    onClick={() => cloneFileRef.current?.click()}
+                    className="w-full py-5 rounded-xl border-2 border-dashed flex flex-col items-center gap-2 transition-all"
+                    style={{
+                      borderColor: cloneFile ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.12)",
+                      background:  cloneFile ? "rgba(147,51,234,0.08)" : "rgba(255,255,255,0.02)",
+                    }}>
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                      style={{ color: cloneFile ? "#c4b5fd" : "rgba(255,255,255,0.3)" }}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                        d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
+                    <span className="text-xs" style={{ color: cloneFile ? "#c4b5fd" : "rgba(255,255,255,0.4)" }}>
+                      {cloneFile ? cloneFile.name : "Click to upload MP3 or WAV (max 10 MB)"}
+                    </span>
+                    {cloneFile && (
+                      <span className="text-[11px]" style={{ color: "rgba(255,255,255,0.25)" }}>
+                        {(cloneFile.size / 1024 / 1024).toFixed(2)} MB
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {/* Voice name */}
+                <div>
+                  <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">Voice Name</p>
+                  <input
+                    type="text"
+                    value={cloneName}
+                    onChange={(e) => setCloneName(e.target.value)}
+                    placeholder="e.g. My Voice Clone"
+                    className="w-full text-sm outline-none rounded-xl px-4 py-3 transition-colors"
+                    style={{
+                      background: "rgba(255,255,255,0.04)",
+                      border:     "1px solid rgba(255,255,255,0.1)",
+                      color:      "rgba(255,255,255,0.85)",
+                    }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = "rgba(168,85,247,0.4)"; }}
+                    onBlur={(e)  => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+                  />
+                </div>
+
+                {/* Clone error */}
+                {cloneError && (
+                  <div className="px-4 py-3 rounded-xl text-sm"
+                    style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5" }}>
+                    {cloneError}
+                  </div>
+                )}
+
+                {/* Cloning spinner */}
+                {clonePhase === "cloning" && (
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl"
+                    style={{ background: "rgba(147,51,234,0.1)", border: "1px solid rgba(168,85,247,0.2)" }}>
+                    <svg className="w-4 h-4 animate-spin shrink-0 text-purple-400" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                    <span className="text-sm text-purple-300">Cloning voice… this may take a moment</span>
+                  </div>
+                )}
+
+                {/* Clone button */}
+                <button type="button"
+                  onClick={cloneVoice}
+                  disabled={!cloneFile || !cloneName.trim() || clonePhase === "cloning"}
+                  className="w-full py-2.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff",
+                    boxShadow: clonePhase === "cloning" ? "none" : "0 4px 14px rgba(124,58,237,0.35)" }}>
+                  {clonePhase === "cloning" ? "Cloning…" : "🧬 Clone Voice"}
+                </button>
               </div>
             )}
           </div>
