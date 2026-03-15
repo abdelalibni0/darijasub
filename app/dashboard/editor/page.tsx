@@ -154,6 +154,9 @@ export default function EditorPage() {
   // Multi-language export modal
   const [multiExportOpen, setMultiExportOpen] = useState(false);
 
+  // AI Voiceover modal
+  const [voiceoverOpen, setVoiceoverOpen] = useState(false);
+
   // Video export modal
   const [videoExportOpen, setVideoExportOpen]     = useState(false);
   const [rawFilename, setRawFilename]             = useState<string | null>(null);
@@ -629,6 +632,16 @@ export default function EditorPage() {
             ✂️ Clean
           </button>
 
+          {/* Voiceover */}
+          <button type="button" onClick={() => setVoiceoverOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border"
+            style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)" }}>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+            </svg>
+            Voiceover
+          </button>
+
           {/* Script toggle */}
           <button type="button" disabled={arabiziConverting}
             onClick={() => { if (!arabiziConverting) toggleScript(); }}
@@ -772,6 +785,14 @@ export default function EditorPage() {
           segments={segments}
           filename={filename}
           onClose={() => setMultiExportOpen(false)}
+        />
+      )}
+
+      {/* ── Voiceover modal ────────────────────────────────────────────────── */}
+      {voiceoverOpen && (
+        <VoiceoverModal
+          segments={segments}
+          onClose={() => setVoiceoverOpen(false)}
         />
       )}
 
@@ -2563,6 +2584,318 @@ function MultiExportModal({
               </button>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── VoiceoverModal ──────────────────────────────────────────────────────────────
+
+interface ElevenLabsVoice {
+  voice_id:    string;
+  name:        string;
+  preview_url: string;
+  labels:      Record<string, string>;
+}
+
+function VoiceoverModal({
+  segments,
+  onClose,
+}: {
+  segments: DisplaySegment[];
+  onClose:  () => void;
+}) {
+  const [voices, setVoices]           = useState<ElevenLabsVoice[]>([]);
+  const [voicesLoading, setVoicesLoading] = useState(true);
+  const [voicesError, setVoicesError] = useState<string | null>(null);
+  const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
+  const [text, setText]               = useState(() => segments.map((s) => s.text).join(" "));
+  const [phase, setPhase]             = useState<"idle" | "generating" | "done" | "error">("idle");
+  const [genError, setGenError]       = useState<string | null>(null);
+  const [audioUrl, setAudioUrl]       = useState<string | null>(null);
+  const previewAudioRef               = useRef<HTMLAudioElement | null>(null);
+  const [playingPreview, setPlayingPreview] = useState<string | null>(null);
+  const backdropRef                   = useRef<HTMLDivElement>(null);
+  const busy                          = phase === "generating";
+
+  // Fetch voices on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/voiceover/voices");
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({})) as { error?: string };
+          throw new Error(j.error ?? `Error ${res.status}`);
+        }
+        const { voices: list } = await res.json() as { voices: ElevenLabsVoice[] };
+        setVoices(list);
+        if (list.length > 0) setSelectedVoice(list[0].voice_id);
+      } catch (err) {
+        setVoicesError(err instanceof Error ? err.message : "Failed to load voices");
+      } finally {
+        setVoicesLoading(false);
+      }
+    })();
+  }, []);
+
+  // Escape to close
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose, busy]);
+
+  // Clean up audio on unmount
+  useEffect(() => {
+    return () => { if (audioUrl) URL.revokeObjectURL(audioUrl); };
+  }, [audioUrl]);
+
+  const playPreview = (voice: ElevenLabsVoice) => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    if (playingPreview === voice.voice_id) {
+      setPlayingPreview(null);
+      return;
+    }
+    const audio = new Audio(voice.preview_url);
+    previewAudioRef.current = audio;
+    setPlayingPreview(voice.voice_id);
+    audio.play().catch(() => {});
+    audio.onended = () => setPlayingPreview(null);
+  };
+
+  const generate = async () => {
+    if (!selectedVoice || !text.trim()) return;
+    setPhase("generating");
+    setGenError(null);
+    if (audioUrl) { URL.revokeObjectURL(audioUrl); setAudioUrl(null); }
+
+    try {
+      const res = await fetch("/api/voiceover", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ text: text.trim(), voiceId: selectedVoice }),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error ?? `Server error ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      setAudioUrl(URL.createObjectURL(blob));
+      setPhase("done");
+    } catch (err) {
+      setGenError(err instanceof Error ? err.message : "Generation failed");
+      setPhase("error");
+    }
+  };
+
+  const downloadAudio = () => {
+    if (!audioUrl) return;
+    const a  = document.createElement("a");
+    a.href   = audioUrl;
+    a.download = "voiceover.mp3";
+    a.click();
+  };
+
+  const reset = () => {
+    if (audioUrl) { URL.revokeObjectURL(audioUrl); setAudioUrl(null); }
+    setPhase("idle");
+    setGenError(null);
+  };
+
+  return (
+    <div ref={backdropRef}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+      onMouseDown={(e) => { if (e.target === backdropRef.current && !busy) onClose(); }}>
+
+      <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
+        style={{ background: "linear-gradient(160deg,#1a0a2e 0%,#0f0619 100%)" }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/8 shrink-0">
+          <div>
+            <h2 className="text-base font-bold text-white">🎙️ AI Voiceover</h2>
+            <p className="text-xs text-white/40 mt-0.5">Generate a voiceover in any language using AI voices</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={busy}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-white/30 hover:text-white/80 transition-colors disabled:opacity-40">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+
+          {/* Voice picker */}
+          <div>
+            <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-3">Select Voice</p>
+
+            {voicesLoading && (
+              <div className="grid grid-cols-2 gap-2">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="h-16 rounded-xl animate-pulse"
+                    style={{ background: "rgba(255,255,255,0.05)" }} />
+                ))}
+              </div>
+            )}
+
+            {voicesError && (
+              <div className="px-4 py-3 rounded-xl text-sm"
+                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5" }}>
+                {voicesError}
+              </div>
+            )}
+
+            {!voicesLoading && !voicesError && (
+              <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                {voices.map((voice) => {
+                  const active  = selectedVoice === voice.voice_id;
+                  const preview = playingPreview === voice.voice_id;
+                  const accent  = voice.labels?.accent ?? voice.labels?.language ?? "";
+                  const gender  = voice.labels?.gender ?? "";
+                  const desc    = [accent, gender].filter(Boolean).join(" · ");
+                  return (
+                    <div key={voice.voice_id}
+                      onClick={() => setSelectedVoice(voice.voice_id)}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-all"
+                      style={{
+                        background:  active ? "rgba(147,51,234,0.2)" : "rgba(255,255,255,0.03)",
+                        borderColor: active ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.08)",
+                      }}>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate"
+                          style={{ color: active ? "#e9d5ff" : "rgba(255,255,255,0.85)" }}>
+                          {voice.name}
+                        </div>
+                        {desc && (
+                          <div className="text-xs mt-0.5 truncate capitalize"
+                            style={{ color: active ? "#c4b5fd" : "rgba(255,255,255,0.35)" }}>
+                            {desc}
+                          </div>
+                        )}
+                      </div>
+                      {voice.preview_url && (
+                        <button type="button"
+                          onClick={(e) => { e.stopPropagation(); playPreview(voice); }}
+                          className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all"
+                          style={{
+                            background:  preview ? "rgba(168,85,247,0.4)" : "rgba(255,255,255,0.08)",
+                            border:      "1px solid " + (preview ? "rgba(168,85,247,0.6)" : "rgba(255,255,255,0.1)"),
+                            color:       preview ? "#e9d5ff" : "rgba(255,255,255,0.5)",
+                          }}
+                          title={preview ? "Stop preview" : "Play preview"}>
+                          {preview ? (
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                              <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
+                            </svg>
+                          ) : (
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M8 5v14l11-7z" />
+                            </svg>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Text area */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">Voiceover Text</p>
+              <span className="text-xs text-white/25">{text.length} chars</span>
+            </div>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={5}
+              disabled={busy}
+              placeholder="Text to convert to speech…"
+              className="w-full resize-none text-sm outline-none rounded-xl px-4 py-3 leading-relaxed transition-colors disabled:opacity-50"
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border:     "1px solid rgba(255,255,255,0.1)",
+                color:      "rgba(255,255,255,0.85)",
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "rgba(168,85,247,0.4)"; }}
+              onBlur={(e)  => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+            />
+          </div>
+
+          {/* Generating state */}
+          {phase === "generating" && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl"
+              style={{ background: "rgba(147,51,234,0.1)", border: "1px solid rgba(168,85,247,0.2)" }}>
+              <svg className="w-4 h-4 animate-spin shrink-0 text-purple-400" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+              <span className="text-sm text-purple-300">Generating voiceover…</span>
+            </div>
+          )}
+
+          {/* Error state */}
+          {phase === "error" && genError && (
+            <div className="px-4 py-3 rounded-xl text-sm"
+              style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5" }}>
+              {genError}
+            </div>
+          )}
+
+          {/* Done: audio player + actions */}
+          {phase === "done" && audioUrl && (
+            <div className="space-y-3 p-4 rounded-xl"
+              style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <p className="text-xs font-semibold text-white/50 uppercase tracking-wider">Generated Audio</p>
+              {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+              <audio controls src={audioUrl} className="w-full" style={{ accentColor: "#9333ea" }} />
+              <div className="flex gap-2">
+                <button type="button" onClick={downloadAudio}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                  style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff",
+                    boxShadow: "0 4px 14px rgba(124,58,237,0.35)" }}>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  ⬇️ Download Audio
+                </button>
+                <button type="button" onClick={reset}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border border-white/10 text-white/60 hover:text-white transition-all"
+                  style={{ background: "rgba(255,255,255,0.04)" }}>
+                  🔄 Regenerate
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-white/8 shrink-0 flex gap-2">
+          <button type="button" onClick={onClose} disabled={busy}
+            className="flex-1 py-2.5 rounded-xl font-semibold text-sm text-white/70 hover:text-white border border-white/10 transition-all disabled:opacity-40"
+            style={{ background: "rgba(255,255,255,0.04)" }}>
+            Close
+          </button>
+          {phase !== "done" && (
+            <button type="button" onClick={generate}
+              disabled={busy || !selectedVoice || !text.trim() || voicesLoading}
+              className="flex-1 py-2.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", color: "#fff",
+                boxShadow: busy ? "none" : "0 4px 14px rgba(124,58,237,0.35)" }}>
+              {busy ? "Generating…" : "🎙️ Generate Voiceover"}
+            </button>
+          )}
         </div>
       </div>
     </div>
