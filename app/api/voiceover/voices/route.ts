@@ -1,4 +1,4 @@
-// Production deployment - ElevenLabs key updated
+// ElevenLabs voiceover - fresh key deployment v2
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
