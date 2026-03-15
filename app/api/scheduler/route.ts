@@ -68,6 +68,31 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export async function PATCH(request: NextRequest) {
+  try {
+    const { supabase, user } = await getAuthedSupabase();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { id, status } = await request.json() as { id?: string; status?: string };
+    if (!id?.trim())     return NextResponse.json({ error: "id is required" }, { status: 400 });
+    if (!status?.trim()) return NextResponse.json({ error: "status is required" }, { status: 400 });
+
+    const { data, error } = await supabase
+      .from("scheduled_posts")
+      .update({ status })
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .select()
+      .single();
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ post: data });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to update post";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
 export async function DELETE(request: NextRequest) {
   try {
     const { supabase, user } = await getAuthedSupabase();

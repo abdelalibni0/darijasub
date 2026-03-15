@@ -1,35 +1,51 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import SchedulerModal, { type ScheduledPost } from "@/components/SchedulerModal";
 
-const PLATFORM_META: Record<string, { label: string; emoji: string; color: string }> = {
-  tiktok:         { label: "TikTok",      emoji: "🎵", color: "#ff0050" },
-  instagram:      { label: "Instagram",   emoji: "📸", color: "#e1306c" },
-  facebook:       { label: "Facebook",    emoji: "📘", color: "#1877f2" },
-  youtube:        { label: "YouTube",     emoji: "▶️", color: "#ff0000" },
-  youtube_shorts: { label: "YT Shorts",   emoji: "📱", color: "#ff0000" },
-  x:              { label: "X",           emoji: "𝕏",  color: "#ffffff" },
+const PLATFORM_META: Record<string, { label: string; emoji: string; url: string }> = {
+  tiktok:         { label: "TikTok",      emoji: "🎵", url: "https://www.tiktok.com/upload" },
+  instagram:      { label: "Instagram",   emoji: "📸", url: "https://www.instagram.com/" },
+  facebook:       { label: "Facebook",    emoji: "📘", url: "https://www.facebook.com/" },
+  youtube:        { label: "YouTube",     emoji: "▶️", url: "https://studio.youtube.com/" },
+  youtube_shorts: { label: "YT Shorts",   emoji: "📱", url: "https://studio.youtube.com/" },
+  x:              { label: "X",           emoji: "𝕏",  url: "https://x.com/compose/tweet" },
 };
 
 const STATUS_STYLE: Record<string, { label: string; bg: string; color: string; border: string }> = {
-  scheduled: { label: "Scheduled", bg: "rgba(59,130,246,0.15)", color: "#93c5fd", border: "rgba(59,130,246,0.3)"  },
-  ready:     { label: "Ready",     bg: "rgba(34,197,94,0.15)",  color: "#86efac", border: "rgba(34,197,94,0.3)"   },
+  scheduled: { label: "Scheduled", bg: "rgba(59,130,246,0.15)",  color: "#93c5fd",               border: "rgba(59,130,246,0.3)"  },
+  ready:     { label: "Ready",     bg: "rgba(34,197,94,0.15)",   color: "#86efac",               border: "rgba(34,197,94,0.3)"   },
   posted:    { label: "Posted",    bg: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.35)", border: "rgba(255,255,255,0.1)" },
 };
 
+interface Toast {
+  id: number;
+  message: string;
+}
+
 function formatDate(iso: string) {
   const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) +
-    " · " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return (
+    d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) +
+    " · " +
+    d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+  );
 }
 
 export default function SchedulerPage() {
-  const [posts,     setPosts]     = useState<ScheduledPost[]>([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState<string | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [deleting,  setDeleting]  = useState<string | null>(null);
+  const [posts,      setPosts]      = useState<ScheduledPost[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState<string | null>(null);
+  const [modalOpen,  setModalOpen]  = useState(false);
+  const [deleting,   setDeleting]   = useState<string | null>(null);
+  const [publishing, setPublishing] = useState<string | null>(null);
+  const [toasts,     setToasts]     = useState<Toast[]>([]);
+
+  const addToast = useCallback((message: string) => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  }, []);
 
   const fetchPosts = async () => {
     setLoading(true);
@@ -62,16 +78,68 @@ export default function SchedulerPage() {
       if (!res.ok) throw new Error("Failed to delete");
       setPosts((prev) => prev.filter((p) => p.id !== id));
     } catch {
-      // silently ignore for now
+      // silently ignore
     } finally {
       setDeleting(null);
     }
   };
 
+  const publishNow = async (post: ScheduledPost) => {
+    setPublishing(post.id);
+    const platform = PLATFORM_META[post.platform] ?? { label: post.platform, emoji: "📤", url: "" };
+
+    // 1. Copy caption + hashtags to clipboard
+    const clipboardText = [post.caption, post.hashtags].filter(Boolean).join("\n\n");
+    if (clipboardText) {
+      await navigator.clipboard.writeText(clipboardText).catch(() => {});
+    }
+
+    // 2. Trigger video download if video_url exists
+    if (post.video_url) {
+      const a = document.createElement("a");
+      a.href = post.video_url;
+      a.download = `video-${post.platform}.mp4`;
+      a.click();
+    }
+
+    // 3. Open platform upload page
+    if (platform.url) {
+      window.open(platform.url, "_blank", "noopener,noreferrer");
+    }
+
+    // 4. Show toast
+    const parts = [
+      clipboardText ? "✅ Caption copied!" : null,
+      post.video_url ? "Video downloading…" : null,
+      `Opening ${platform.label}`,
+    ].filter(Boolean).join("  ");
+    addToast(parts);
+
+    // 5. Mark as posted via PATCH
+    try {
+      const res = await fetch("/api/scheduler", {
+        method:  "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ id: post.id, status: "posted" }),
+      });
+      if (res.ok) {
+        setPosts((prev) =>
+          prev.map((p) => p.id === post.id ? { ...p, status: "posted" } : p)
+        );
+      }
+    } catch {
+      // silently ignore status update failure
+    } finally {
+      setPublishing(null);
+    }
+  };
+
   const handleScheduled = (post: ScheduledPost) => {
-    setPosts((prev) => [...prev, post].sort((a, b) =>
-      new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
-    ));
+    setPosts((prev) =>
+      [...prev, post].sort(
+        (a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
+      )
+    );
   };
 
   return (
@@ -79,6 +147,25 @@ export default function SchedulerPage() {
       className="min-h-screen p-6 md:p-10"
       style={{ background: "linear-gradient(160deg,#0d0618 0%,#080410 100%)" }}
     >
+      {/* Toast container */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className="px-4 py-3 rounded-xl text-sm font-medium shadow-xl"
+            style={{
+              background:  "linear-gradient(135deg,#1a0a2e,#12062a)",
+              border:      "1px solid rgba(168,85,247,0.4)",
+              color:       "#e9d5ff",
+              boxShadow:   "0 8px 32px rgba(0,0,0,0.5)",
+              animation:   "fadeInUp 0.25s ease",
+            }}
+          >
+            {t.message}
+          </div>
+        ))}
+      </div>
+
       {/* Page header */}
       <div className="flex items-center justify-between mb-8">
         <div>
@@ -160,9 +247,12 @@ export default function SchedulerPage() {
       {!loading && !error && posts.length > 0 && (
         <div className="space-y-3">
           {posts.map((post) => {
-            const platform = PLATFORM_META[post.platform] ?? { label: post.platform, emoji: "📤", color: "#ffffff" };
-            const status   = STATUS_STYLE[post.status]   ?? STATUS_STYLE.scheduled;
-            const isDel    = deleting === post.id;
+            const platform  = PLATFORM_META[post.platform] ?? { label: post.platform, emoji: "📤", url: "" };
+            const status    = STATUS_STYLE[post.status]    ?? STATUS_STYLE.scheduled;
+            const isDel     = deleting   === post.id;
+            const isPub     = publishing === post.id;
+            const isPosted  = post.status === "posted";
+
             return (
               <div
                 key={post.id}
@@ -193,31 +283,66 @@ export default function SchedulerPage() {
                     <p className="text-xs text-white/45 mt-1 truncate max-w-xl">{post.caption}</p>
                   )}
                   {post.hashtags && (
-                    <p className="text-xs mt-0.5 truncate max-w-xl" style={{ color: "rgba(168,85,247,0.7)" }}>{post.hashtags}</p>
+                    <p className="text-xs mt-0.5 truncate max-w-xl" style={{ color: "rgba(168,85,247,0.7)" }}>
+                      {post.hashtags}
+                    </p>
                   )}
                 </div>
 
-                {/* Delete button */}
-                <button
-                  type="button"
-                  onClick={() => deletePost(post.id)}
-                  disabled={isDel}
-                  className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40"
-                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "rgba(252,165,165,0.7)" }}
-                  title="Delete scheduled post"
-                >
-                  {isDel ? (
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  )}
-                </button>
+                {/* Action buttons */}
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Publish Now */}
+                  <button
+                    type="button"
+                    onClick={() => publishNow(post)}
+                    disabled={isPub || isDel || isPosted}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      background: isPosted
+                        ? "rgba(255,255,255,0.04)"
+                        : "linear-gradient(90deg,#059669,#10b981)",
+                      color:      isPosted ? "rgba(255,255,255,0.3)" : "#fff",
+                      border:     isPosted ? "1px solid rgba(255,255,255,0.08)" : "none",
+                      boxShadow:  isPosted || isPub ? "none" : "0 2px 8px rgba(16,185,129,0.3)",
+                    }}
+                    title={isPosted ? "Already posted" : "Publish Now"}
+                  >
+                    {isPub ? (
+                      <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                      </svg>
+                    )}
+                    {isPub ? "Publishing…" : isPosted ? "Posted" : "Publish Now"}
+                  </button>
+
+                  {/* Delete */}
+                  <button
+                    type="button"
+                    onClick={() => deletePost(post.id)}
+                    disabled={isDel || isPub}
+                    className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40"
+                    style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "rgba(252,165,165,0.7)" }}
+                    title="Delete scheduled post"
+                  >
+                    {isDel ? (
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -231,6 +356,13 @@ export default function SchedulerPage() {
           onScheduled={handleScheduled}
         />
       )}
+
+      <style>{`
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
     </div>
   );
 }
