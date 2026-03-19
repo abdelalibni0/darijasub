@@ -80,6 +80,24 @@ export function whisperSegmentsToSrt(
   }));
 }
 
+/** Parse an SRT string into SrtSegment array */
+export function parseSrtString(srt: string): SrtSegment[] {
+  const blocks = srt.trim().split(/\n\n+/);
+  const segments: SrtSegment[] = [];
+  for (const block of blocks) {
+    const lines = block.trim().split("\n");
+    if (lines.length < 3) continue;
+    const index = parseInt(lines[0].trim(), 10);
+    const timeParts = lines[1].split(" --> ");
+    if (timeParts.length !== 2 || isNaN(index)) continue;
+    const start = timeParts[0].trim();
+    const end = timeParts[1].trim();
+    const text = lines.slice(2).join("\n").trim();
+    if (text) segments.push({ index, start, end, text });
+  }
+  return segments;
+}
+
 /** Serialize SrtSegment array to SRT file string */
 export function segmentsToSrtString(segments: SrtSegment[]): string {
   return segments

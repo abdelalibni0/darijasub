@@ -9,8 +9,7 @@ import {
   whisperNameToCode,
 } from "@/lib/languages";
 import {
-  mergeShortSegments,
-  whisperSegmentsToSrt,
+  parseSrtString,
   segmentsToSrtString,
   type SrtSegment,
 } from "@/lib/srt";
@@ -53,30 +52,28 @@ export async function POST(request: NextRequest) {
     const { file: audioFile, cleanup: cleanupTempFiles } =
       await ensureWhisperCompatible(blob, originalName);
 
-    // ── Step 3: Transcribe with Whisper (auto-detect language) ────────────────
-    const transcription = await openai.audio.transcriptions.create({
+    // ── Step 3: Transcribe with gpt-4o-transcribe ─────────────────────────────
+    const srtResponse = await openai.audio.transcriptions.create({
       file: audioFile,
       model: "gpt-4o-transcribe",
       language: "ar",
       prompt: "Moroccan Darija dialect, mixed with French and English words. Fast casual speech. Speaker uses words like: walu, bzaf, mzyan, wach, kayn, bghit, smiya, dyal, dyali, hna, huma, nta, nti, ana, fin, kifach, 3lach, hit, walakin, yallah, safi, 3adl. French words mixed in naturally.",
-      response_format: "verbose_json",
-      timestamp_granularities: ["segment"],
-    });
+      response_format: "srt",
+    }) as unknown as string;
 
     await cleanupTempFiles();
 
-    if (!transcription.segments || transcription.segments.length === 0) {
+    let segments = parseSrtString(srtResponse);
+
+    if (segments.length === 0) {
       return NextResponse.json(
         { error: "No speech detected in the file" },
         { status: 422 }
       );
     }
 
-    // Whisper returns a full language name e.g. "arabic", "french", "english"
-    const detectedLanguage = transcription.language ?? "unknown";
-
-    const rawSegments = mergeShortSegments(transcription.segments);
-    let segments = whisperSegmentsToSrt(rawSegments);
+    // Language forced to Arabic via the language param
+    const detectedLanguage = "arabic";
 
     // ── Step 4: Translate with Claude — only in translate mode ────────────────
     if (mode === "translate" && targetLang) {
