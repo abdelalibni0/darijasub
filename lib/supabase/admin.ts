@@ -18,13 +18,23 @@ export const EXPORT_BUCKET = "export-uploads";
  */
 export async function ensureBucket() {
   const admin = createAdminClient();
-  const { error } = await admin.storage.createBucket(UPLOAD_BUCKET, {
+  const FILE_SIZE_LIMIT = 209_715_200; // 200 MB
+
+  // Create the bucket if it doesn't exist yet
+  const { error: createError } = await admin.storage.createBucket(UPLOAD_BUCKET, {
     public: false,
-    fileSizeLimit: 26_214_400, // 25 MB
+    fileSizeLimit: FILE_SIZE_LIMIT,
   });
-  if (error && !error.message.includes("already exists")) {
-    throw new Error(`Could not create storage bucket: ${error.message}`);
+
+  if (createError && !createError.message.includes("already exists")) {
+    throw new Error(`Could not create storage bucket: ${createError.message}`);
   }
+
+  // Always update the limit — createBucket silently ignores fileSizeLimit on existing buckets
+  await admin.storage.updateBucket(UPLOAD_BUCKET, {
+    public: false,
+    fileSizeLimit: FILE_SIZE_LIMIT,
+  });
 }
 
 /**

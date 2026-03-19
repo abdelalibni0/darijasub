@@ -180,16 +180,27 @@ export default function UploadCard() {
 
   // ── File selection ────────────────────────────────────────────────────────────
 
+  const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200 MB — matches Supabase bucket limit
+
+  const acceptFile = (f: File) => {
+    if (f.size > MAX_FILE_SIZE) {
+      setError(`File is too large (${formatBytes(f.size)}). Maximum size is 200 MB.`);
+      return;
+    }
+    resetResult();
+    setFile(f);
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
     const dropped = e.dataTransfer.files[0];
-    if (dropped) { resetResult(); setFile(dropped); }
+    if (dropped) acceptFile(dropped);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const sel = e.target.files?.[0];
-    if (sel) { resetResult(); setFile(sel); }
+    if (sel) acceptFile(sel);
   };
 
   // ── Submit ────────────────────────────────────────────────────────────────────
