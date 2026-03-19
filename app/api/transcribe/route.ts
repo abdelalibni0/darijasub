@@ -135,8 +135,7 @@ async function translateSegments(
       max_tokens: 4096,
       system: systemPrompt,
       messages: [
-        { role: "user",      content: JSON.stringify(input) + "\n\nRespond with ONLY a valid JSON array. No explanation, no markdown, no code fences. Start with [ and end with ]." },
-        { role: "assistant", content: "[" },
+        { role: "user", content: JSON.stringify(input) + "\n\nYOUR RESPONSE MUST START WITH [ AND END WITH ]. DO NOT write anything before [. DO NOT write anything after ]. NO markdown. NO code fences. NO explanation. ONLY the raw JSON array." },
       ],
     });
 
@@ -147,9 +146,7 @@ async function translateSegments(
 
     let parsed: Array<{ index: number; text: string }>;
     try {
-      // Prepend "[" to match the assistant prefill used to force JSON output
-      const raw     = "[" + rawContent.text;
-      const cleaned = raw
+      const cleaned = rawContent.text
         .replace(/^```[a-z]*\n?/i, "")
         .replace(/\n?```$/i, "")
         .trim();
