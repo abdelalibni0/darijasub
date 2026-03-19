@@ -45,8 +45,8 @@ export async function GET(request: NextRequest) {
   const vapidPublic  = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
   const vapidPrivate = process.env.VAPID_PRIVATE_KEY;
   const vapidEmail   = process.env.VAPID_EMAIL ?? "mailto:aabaalimanager@gmail.com";
-  const pushEnabled  = vapidPublic && vapidPrivate;
-  if (pushEnabled) {
+  const pushEnabled  = !!(vapidPublic && vapidPrivate);
+  if (vapidPublic && vapidPrivate) {
     webpush.setVapidDetails(vapidEmail, vapidPublic, vapidPrivate);
   }
 
@@ -118,7 +118,7 @@ export async function GET(request: NextRequest) {
           `,
         });
         if (emailError) {
-          console.error("[remind] email error for", userEmail, emailError.message);
+          console.error("[remind] email error for", userEmail, (emailError as { message?: string }).message ?? emailError);
         }
       }
 

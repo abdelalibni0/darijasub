@@ -17,7 +17,7 @@ self.addEventListener("notificationclick", (event) => {
     clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
-        const target = data?.url ?? "/dashboard/scheduler";
+        const target = event.notification.data?.url ?? "/dashboard/scheduler";
         for (const client of clientList) {
           if (client.url.includes(target) && "focus" in client) {
             return client.focus();
