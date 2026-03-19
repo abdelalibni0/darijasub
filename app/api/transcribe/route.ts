@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { createAdminClient, UPLOAD_BUCKET } from "@/lib/supabase/admin";
 import { ensureWhisperCompatible } from "@/lib/ffmpeg";
@@ -9,15 +8,14 @@ import {
   whisperNameToCode,
 } from "@/lib/languages";
 import {
-  mergeShortSegments,
-  whisperSegmentsToSrt,
+  wordsToSegments,
   segmentsToSrtString,
   type SrtSegment,
+  type WordTimestamp,
 } from "@/lib/srt";
 
 export const maxDuration = 300;
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(request: NextRequest) {
@@ -53,29 +51,47 @@ export async function POST(request: NextRequest) {
     const { file: audioFile, cleanup: cleanupTempFiles } =
       await ensureWhisperCompatible(blob, originalName);
 
-    // ── Step 3: Transcribe with Whisper (verbose_json for segment timestamps) ─
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: "whisper-1",
-      language: "ar",
-      prompt: "Moroccan Darija dialect, mixed with French and English words. Fast casual speech. Speaker uses words like: walu, bzaf, mzyan, wach, kayn, bghit, smiya, dyal, dyali, hna, huma, nta, nti, ana, fin, kifach, 3lach, hit, walakin, yallah, safi, 3adl. French words mixed in naturally.",
-      response_format: "verbose_json",
-      timestamp_granularities: ["segment"],
+    // ── Step 3: Transcribe with ElevenLabs Scribe ────────────────────────────
+    const elevenForm = new FormData();
+    elevenForm.append("audio", audioFile);
+    elevenForm.append("model_id", "scribe_v1");
+    elevenForm.append("language_code", "ar");
+    elevenForm.append("timestamps_granularity", "word");
+
+    const scribeRes = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+      method: "POST",
+      headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY! },
+      body: elevenForm,
     });
 
     await cleanupTempFiles();
 
-    if (!transcription.segments || transcription.segments.length === 0) {
+    if (!scribeRes.ok) {
+      const errText = await scribeRes.text();
+      throw new Error(`ElevenLabs Scribe error ${scribeRes.status}: ${errText}`);
+    }
+
+    const scribeData = await scribeRes.json() as {
+      language_code?: string;
+      text?: string;
+      words?: Array<{ text: string; type: string; start: number; end: number }>;
+    };
+
+    const wordTokens: WordTimestamp[] = (scribeData.words ?? [])
+      .filter((w) => w.type === "word")
+      .map((w) => ({ word: w.text, start: w.start, end: w.end }));
+
+    let segments = wordsToSegments(wordTokens);
+
+    if (segments.length === 0) {
       return NextResponse.json(
         { error: "No speech detected in the file" },
         { status: 422 }
       );
     }
 
-    const detectedLanguage = transcription.language ?? "arabic";
-
-    const rawSegments = mergeShortSegments(transcription.segments);
-    let segments = whisperSegmentsToSrt(rawSegments);
+    // Force Arabic since we pass language_code: "ar"; use full name for downstream logic
+    const detectedLanguage = "arabic";
 
     // ── Step 4: Translate with Claude — only in translate mode ────────────────
     if (mode === "translate" && targetLang) {
