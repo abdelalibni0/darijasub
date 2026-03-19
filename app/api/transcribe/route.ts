@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     // ── Step 3: Transcribe with Whisper (auto-detect language) ────────────────
     const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
-      model: "whisper-1",
+      model: "gpt-4o-transcribe",
       language: "ar",
       prompt: "Moroccan Darija dialect, mixed with French and English words. Fast casual speech. Speaker uses words like: walu, bzaf, mzyan, wach, kayn, bghit, smiya, dyal, dyali, hna, huma, nta, nti, ana, fin, kifach, 3lach, hit, walakin, yallah, safi, 3adl. French words mixed in naturally.",
       response_format: "verbose_json",
