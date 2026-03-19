@@ -132,7 +132,10 @@ async function translateSegments(
       model: "claude-sonnet-4-6",
       max_tokens: 4096,
       system: systemPrompt,
-      messages: [{ role: "user", content: JSON.stringify(input) }],
+      messages: [
+        { role: "user",      content: JSON.stringify(input) + "\n\nRespond with ONLY a valid JSON array. No explanation, no markdown, no code fences. Start with [ and end with ]." },
+        { role: "assistant", content: "[" },
+      ],
     });
 
     const rawContent = message.content[0];
@@ -142,7 +145,9 @@ async function translateSegments(
 
     let parsed: Array<{ index: number; text: string }>;
     try {
-      const cleaned = rawContent.text
+      // Prepend "[" to match the assistant prefill used to force JSON output
+      const raw     = "[" + rawContent.text;
+      const cleaned = raw
         .replace(/^```[a-z]*\n?/i, "")
         .replace(/\n?```$/i, "")
         .trim();
