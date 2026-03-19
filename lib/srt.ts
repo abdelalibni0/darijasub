@@ -80,6 +80,60 @@ export function whisperSegmentsToSrt(
   }));
 }
 
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Group word-level timestamps (from gpt-4o-transcribe json + timestamp_granularities:["word"])
+ * into subtitle segments of at most MAX_WORDS words or MAX_DURATION seconds.
+ * Also breaks on natural pauses (gap > PAUSE_THRESHOLD).
+ */
+export function wordsToSegments(words: WordTimestamp[]): SrtSegment[] {
+  if (words.length === 0) return [];
+
+  const MAX_WORDS       = 8;
+  const MAX_DURATION    = 5;
+  const PAUSE_THRESHOLD = 0.6;
+
+  const segments: SrtSegment[] = [];
+  let groupStart  = words[0].start;
+  let groupTokens: string[] = [];
+  let groupEnd    = words[0].end;
+  let segIndex    = 1;
+
+  for (let i = 0; i < words.length; i++) {
+    const w    = words[i];
+    const next = words[i + 1];
+
+    groupTokens.push(w.word.trim());
+    groupEnd = w.end;
+
+    const shouldBreak =
+      groupTokens.length >= MAX_WORDS ||
+      groupEnd - groupStart >= MAX_DURATION ||
+      !next ||
+      (next.start - w.end) > PAUSE_THRESHOLD;
+
+    if (shouldBreak) {
+      segments.push({
+        index: segIndex++,
+        start: secondsToTimestamp(groupStart),
+        end:   secondsToTimestamp(groupEnd),
+        text:  groupTokens.join(" "),
+      });
+      if (next) {
+        groupStart  = next.start;
+        groupTokens = [];
+      }
+    }
+  }
+
+  return segments;
+}
+
 /** Parse an SRT string into SrtSegment array */
 export function parseSrtString(srt: string): SrtSegment[] {
   const blocks = srt.trim().split(/\n\n+/);

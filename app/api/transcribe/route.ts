@@ -9,9 +9,10 @@ import {
   whisperNameToCode,
 } from "@/lib/languages";
 import {
-  parseSrtString,
+  wordsToSegments,
   segmentsToSrtString,
   type SrtSegment,
+  type WordTimestamp,
 } from "@/lib/srt";
 
 export const maxDuration = 300;
@@ -53,17 +54,19 @@ export async function POST(request: NextRequest) {
       await ensureWhisperCompatible(blob, originalName);
 
     // ── Step 3: Transcribe with gpt-4o-transcribe ─────────────────────────────
-    const srtResponse = await openai.audio.transcriptions.create({
+    const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
       model: "gpt-4o-transcribe",
       language: "ar",
       prompt: "Moroccan Darija dialect, mixed with French and English words. Fast casual speech. Speaker uses words like: walu, bzaf, mzyan, wach, kayn, bghit, smiya, dyal, dyali, hna, huma, nta, nti, ana, fin, kifach, 3lach, hit, walakin, yallah, safi, 3adl. French words mixed in naturally.",
-      response_format: "srt",
-    }) as unknown as string;
+      response_format: "json",
+      timestamp_granularities: ["word"],
+    }) as unknown as { text: string; words?: WordTimestamp[] };
 
     await cleanupTempFiles();
 
-    let segments = parseSrtString(srtResponse);
+    const words = transcription.words ?? [];
+    let segments = wordsToSegments(words);
 
     if (segments.length === 0) {
       return NextResponse.json(
