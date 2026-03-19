@@ -48,10 +48,34 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Step 2: Convert to Whisper-compatible format if needed (e.g. .mov → mp3)
-    const { file: audioFile, cleanup: cleanupTempFiles } =
+    const { file: rawAudioFile, cleanup: cleanupTempFiles } =
       await ensureWhisperCompatible(blob, originalName);
 
-    // ── Step 3: Transcribe with ElevenLabs Scribe ────────────────────────────
+    // ── Step 3: Voice isolation ───────────────────────────────────────────────
+    let audioFile = rawAudioFile;
+    try {
+      const isolationForm = new FormData();
+      isolationForm.append("audio", rawAudioFile, rawAudioFile.name);
+
+      const isolationRes = await fetch("https://api.elevenlabs.io/v1/audio-isolation", {
+        method: "POST",
+        headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY! },
+        body: isolationForm,
+      });
+
+      if (isolationRes.ok) {
+        const isolatedBuffer = await isolationRes.arrayBuffer();
+        audioFile = new File([isolatedBuffer], rawAudioFile.name, { type: "audio/mpeg" });
+        console.log("[/api/transcribe] voice isolation applied");
+      } else {
+        const errText = await isolationRes.text();
+        console.warn(`[/api/transcribe] voice isolation failed (${isolationRes.status}): ${errText} — using original audio`);
+      }
+    } catch (isolationErr) {
+      console.warn("[/api/transcribe] voice isolation error — using original audio:", isolationErr);
+    }
+
+    // ── Step 4: Transcribe with ElevenLabs Scribe ────────────────────────────
     const elevenForm = new FormData();
     elevenForm.append("file", audioFile, audioFile.name);
     elevenForm.append("model_id", "scribe_v1");

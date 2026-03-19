@@ -50,17 +50,20 @@ const GROUPED = GROUP_ORDER.reduce<Record<LangGroup, Language[]>>(
 type Status = "idle" | "uploading" | "transcribing" | "reviewing" | "translating" | "done" | "error";
 type Mode   = "transcribe" | "translate";
 
-function getSteps(mode: Mode) {
+type AudioPhase = "isolating" | "transcribing";
+
+function getSteps(mode: Mode, audioPhase: AudioPhase = "isolating") {
+  const audioLabel = audioPhase === "isolating" ? "Isolating voice..." : "Transcribing audio";
   return mode === "translate"
     ? [
         { label: "Uploading file",        icon: "upload" as const },
-        { label: "Transcribing audio",    icon: "mic"    as const },
+        { label: audioLabel,              icon: "mic"    as const },
         { label: "Translating subtitles", icon: "globe"  as const },
         { label: "Ready to download",     icon: "check"  as const },
       ]
     : [
         { label: "Uploading file",     icon: "upload" as const },
-        { label: "Transcribing audio", icon: "mic"    as const },
+        { label: audioLabel,           icon: "mic"    as const },
         { label: "Ready to download",  icon: "check"  as const },
       ];
 }
@@ -85,6 +88,10 @@ export default function UploadCard() {
   // Review step state
   const [reviewSegs, setReviewSegs] = useState<SrtSegment[]>([]);
 
+  // Audio processing phase (isolation → transcription)
+  const [audioPhase, setAudioPhase]   = useState<AudioPhase>("isolating");
+  const phaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Language picker state
   const [langOpen, setLangOpen]   = useState(false);
   const [langQuery, setLangQuery] = useState("");
@@ -98,7 +105,7 @@ export default function UploadCard() {
   const isReviewing   = status === "reviewing";
   const showProgress  = isProcessing || status === "done";
 
-  const steps    = getSteps(mode);
+  const steps    = getSteps(mode, status === "transcribing" ? audioPhase : "isolating");
   const statuses = steps.map((_, i) =>
     i < stepIndex ? ("done" as const) : i === stepIndex ? ("active" as const) : ("pending" as const)
   );
@@ -159,6 +166,10 @@ export default function UploadCard() {
       clearInterval(progressIntervalRef.current);
       progressIntervalRef.current = null;
     }
+    if (phaseTimerRef.current) {
+      clearTimeout(phaseTimerRef.current);
+      phaseTimerRef.current = null;
+    }
   };
 
   const startSlowFill = (from: number, to: number) => {
@@ -180,6 +191,7 @@ export default function UploadCard() {
     setStepIndex(0);
     setProgress(0);
     setReviewSegs([]);
+    setAudioPhase("isolating");
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
     setDownloadUrl(null);
   };
@@ -288,8 +300,15 @@ export default function UploadCard() {
         });
       if (uploadError) throw new Error(uploadError.message);
 
+      setAudioPhase("isolating");
       setStepIndex(1); setProgress(25); setStatus("transcribing");
-      startSlowFill(25, 70);
+      startSlowFill(25, 45);
+
+      // After ~12s switch label from "Isolating voice..." to "Transcribing audio"
+      phaseTimerRef.current = setTimeout(() => {
+        setAudioPhase("transcribing");
+        startSlowFill(45, 70);
+      }, 12000);
 
       // Always transcribe-only here; translation happens after review
       const transcribeRes = await fetch("/api/transcribe", {
