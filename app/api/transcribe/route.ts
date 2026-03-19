@@ -9,10 +9,10 @@ import {
   whisperNameToCode,
 } from "@/lib/languages";
 import {
-  wordsToSegments,
+  mergeShortSegments,
+  whisperSegmentsToSrt,
   segmentsToSrtString,
   type SrtSegment,
-  type WordTimestamp,
 } from "@/lib/srt";
 
 export const maxDuration = 300;
@@ -53,30 +53,29 @@ export async function POST(request: NextRequest) {
     const { file: audioFile, cleanup: cleanupTempFiles } =
       await ensureWhisperCompatible(blob, originalName);
 
-    // ── Step 3: Transcribe with gpt-4o-transcribe ─────────────────────────────
+    // ── Step 3: Transcribe with Whisper (verbose_json for segment timestamps) ─
     const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
-      model: "gpt-4o-transcribe",
+      model: "whisper-1",
       language: "ar",
       prompt: "Moroccan Darija dialect, mixed with French and English words. Fast casual speech. Speaker uses words like: walu, bzaf, mzyan, wach, kayn, bghit, smiya, dyal, dyali, hna, huma, nta, nti, ana, fin, kifach, 3lach, hit, walakin, yallah, safi, 3adl. French words mixed in naturally.",
-      response_format: "json",
-      timestamp_granularities: ["word"],
-    }) as unknown as { text: string; words?: WordTimestamp[] };
+      response_format: "verbose_json",
+      timestamp_granularities: ["segment"],
+    });
 
     await cleanupTempFiles();
 
-    const words = transcription.words ?? [];
-    let segments = wordsToSegments(words);
-
-    if (segments.length === 0) {
+    if (!transcription.segments || transcription.segments.length === 0) {
       return NextResponse.json(
         { error: "No speech detected in the file" },
         { status: 422 }
       );
     }
 
-    // Language forced to Arabic via the language param
-    const detectedLanguage = "arabic";
+    const detectedLanguage = transcription.language ?? "arabic";
+
+    const rawSegments = mergeShortSegments(transcription.segments);
+    let segments = whisperSegmentsToSrt(rawSegments);
 
     // ── Step 4: Translate with Claude — only in translate mode ────────────────
     if (mode === "translate" && targetLang) {
