@@ -111,25 +111,25 @@ export function getTranslationPrompt(
   const targetInstructions = getTargetInstructions(targetLang.value);
 
   return (
-    `You are a professional subtitle translator. Your goal is to convey the MEANING and FEELING of the original speech, not translate word by word.\n\n` +
-    `Source: ${formatDetectedLanguage(detectedLanguage)} (auto-detected)\n` +
-    `Target: ${targetLang.promptName}\n\n` +
+    `You are an expert subtitle localizer. Your job is not to translate — it is to rewrite the content so it sounds completely natural to a native ${targetLang.promptName} speaker, as if it were originally written in that language.\n\n` +
+    `Source language: ${formatDetectedLanguage(detectedLanguage)}\n` +
+    `Target language: ${targetLang.promptName}\n\n` +
     `${targetInstructions}\n\n` +
-    `Translation philosophy:\n` +
-    `- Translate the INTENT and MEANING, not each word literally.\n` +
-    `- If a phrase uses slang, idioms, or expressions, find the equivalent natural expression in the target language — do not translate the words themselves.\n` +
-    `- Subtitles should sound like something a native ${targetLang.promptName} speaker would actually say in conversation.\n` +
-    `- Keep the natural flow of spoken language — how a real person talks, not how a textbook writes.\n` +
-    `- Never do literal word-for-word translation.\n` +
-    `- If the speaker is casual, funny, or emotional, preserve that tone in the translation.\n` +
-    `- The source may mix multiple languages (e.g. Arabic, French, Amazigh, English) — translate the overall meaning, not each language fragment separately.\n` +
-    `- Keep subtitles concise — they must be readable on screen in the time available.\n\n` +
+    `HOW TO TRANSLATE:\n\n` +
+    `1. UNDERSTAND BEFORE YOU WRITE. Read the full batch first to understand the topic, context, and speaker's tone. Then translate each segment with that full context in mind — never in isolation.\n\n` +
+    `2. TRANSLATE MEANING, NOT WORDS. Ask yourself: "What is this person actually trying to say?" Then write that — in the target language's own words, its own idioms, its own rhythm. Do not map words across.\n\n` +
+    `3. REPLACE IDIOMS AND SLANG WITH EQUIVALENTS. If the source uses a colloquial expression, a saying, or slang, find the natural equivalent in the target language. Never translate the expression literally — that produces nonsense. Example: "break a leg" in English should become the equivalent good-luck expression in the target language, not "casse une jambe".\n\n` +
+    `4. MATCH THE SPEAKER'S REGISTER EXACTLY. Casual → casual. Formal → formal. Humorous → humorous. Sarcastic → sarcastic. Emotional → emotional. A joke must still land as a joke. A rant must still feel like a rant. Preserve the speaker's personality and energy.\n\n` +
+    `5. HANDLE CODE-SWITCHING NATURALLY. The source may mix languages (e.g. Darija + French + English, Arabic + Amazigh). This is natural speech. Translate the overall meaning of the full utterance — do not translate each language fragment separately, and do not flag the mixing as an error.\n\n` +
+    `6. WRITE FOR THE EAR, NOT THE PAGE. Subtitles represent spoken language. Write how a real person would say something out loud — contractions, dropped words, natural phrasing. Avoid formal written register unless the speaker is being formal.\n\n` +
+    `7. NEVER PRODUCE MACHINE-TRANSLATION PATTERNS. Avoid calques (word-for-word structural copies), unnatural word order, and stiff phrasing. If a sentence sounds like Google Translate, rewrite it.\n\n` +
+    `8. KEEP SUBTITLES CONCISE. Cut filler words if needed. Never cut meaning. Each segment must be readable on screen in the time available.\n\n` +
     `YOUR RESPONSE MUST BE A SINGLE RAW JSON ARRAY AND NOTHING ELSE.\n` +
     `Do not write any text before the "[". Do not write any text after the "]".\n` +
     `Do not use markdown. Do not use code fences. Do not explain anything.\n` +
     `The very first character of your response must be "[" and the very last must be "]".\n\n` +
     `Input format: [{"index": 1, "text": "..."}, {"index": 2, "text": "..."}, ...]\n` +
-    `Output format: [{"index": 1, "text": "<translation>"}, {"index": 2, "text": "<translation>"}, ...]\n\n` +
+    `Output format: [{"index": 1, "text": "<localized text>"}, {"index": 2, "text": "<localized text>"}, ...]\n\n` +
     `JSON rules:\n` +
     `- Return exactly the same number of objects as you received.\n` +
     `- Keep every "index" value unchanged.\n` +
@@ -141,49 +141,83 @@ function getTargetInstructions(targetLangValue: string): string {
   switch (targetLangValue) {
     case "darija-ma":
       return (
-        "Translate into Moroccan Darija. Write in Arabic script. " +
-        "Use natural Moroccan Darija as spoken in Morocco — include French loanwords where commonly used. " +
-        "Do NOT write in Modern Standard Arabic."
+        "TARGET: Moroccan Darija — write in Arabic script.\n" +
+        "This is colloquial Moroccan Arabic as spoken in everyday life, not written MSA. Key points:\n" +
+        "- Use Moroccan vocabulary naturally: 'واش' (question marker), 'كيفاش' (how), 'فين' (where), 'علاش' (why), 'بزاف' (a lot), 'مزيان' (good), 'دابا' (now), 'غير' (just/only).\n" +
+        "- French loanwords are normal and expected in Moroccan Darija: 'البروبلم', 'لكار' (car), 'البورطابل' (mobile), 'الطوبيس' (bus). Use them as a Moroccan would.\n" +
+        "- The source may mix Darija, French, and sometimes Amazigh/Tamazight — this is natural. Translate the overall meaning into natural Darija.\n" +
+        "- Colloquial expressions must be replaced with their Darija equivalents, not translated literally. e.g. if the source means 'I'm tired', write 'عيّيت' not a literal translation of 'tired'.\n" +
+        "- Preserve humor, sarcasm, and casual tone — Moroccan speech is expressive.\n" +
+        "- NEVER write in Modern Standard Arabic (Fusha)."
       );
     case "darija-dz":
       return (
-        "Translate into Algerian Darija. Write in Arabic script. " +
-        "Use natural Algerian Darija as spoken in Algeria — include French loanwords and Tamazight expressions where appropriate. " +
-        "Do NOT write in Modern Standard Arabic."
+        "TARGET: Algerian Darija — write in Arabic script.\n" +
+        "This is colloquial Algerian Arabic as spoken in everyday life, not MSA. Key points:\n" +
+        "- Use Algerian vocabulary naturally: 'واش' (what/question), 'كيفاش' (how), 'وين' (where), 'علاش' (why), 'يزي' (enough/ok), 'برك' (enough), 'هاك' (here/take), 'حنايا' (we).\n" +
+        "- French loanwords are common and natural: 'لابيل' (beautiful), 'البونجور', 'لكار', etc. Use them where an Algerian naturally would.\n" +
+        "- Tamazight/Berber words may appear — leave common ones if they fit, or translate their meaning into natural Algerian Darija.\n" +
+        "- Replace idioms and expressions with their natural Algerian equivalents — never translate them literally.\n" +
+        "- Preserve the speaker's tone, humor, and energy.\n" +
+        "- NEVER write in Modern Standard Arabic (Fusha)."
       );
     case "tunisian_darija":
       return (
-        "Translate into Tunisian Darija. Write in Arabic script. " +
-        "Use natural Tunisian dialect as spoken in Tunisia — it mixes Arabic with French loanwords and some Berber influences. " +
-        "Do NOT write in Modern Standard Arabic."
+        "TARGET: Tunisian Darija — write in Arabic script.\n" +
+        "This is colloquial Tunisian Arabic as spoken daily, not MSA. Key points:\n" +
+        "- Use Tunisian vocabulary naturally: 'شنوّا' (what), 'كيفاش' (how), 'وين' (where), 'عليش' (why), 'برشا' (a lot), 'باهي' (good/ok), 'توّا' (now), 'مانيش' (I'm not).\n" +
+        "- French loanwords are naturally embedded: 'لكار', 'البورطابل', 'فيلو' (son/guy in slang), etc.\n" +
+        "- Tunisian speech is fast and elliptical — contractions and dropped words are normal. Reflect that.\n" +
+        "- Replace idioms with natural Tunisian equivalents — never translate them literally.\n" +
+        "- NEVER write in Modern Standard Arabic (Fusha)."
       );
     case "arabic_egyptian":
       return (
-        "Translate into Egyptian colloquial Arabic as spoken in Cairo (Masri). Write in Arabic script. " +
-        "Use natural Egyptian dialect vocabulary and expressions — not Modern Standard Arabic. " +
-        "For example: use 'إيه' not 'ما', 'عايز' not 'يريد', 'دلوقتي' not 'الآن'."
+        "TARGET: Egyptian colloquial Arabic (Masri/Aamiyya) as spoken in Cairo — write in Arabic script.\n" +
+        "Key vocabulary markers:\n" +
+        "- 'إيه' (what), 'مين' (who), 'فين' (where), 'إمتى' (when), 'ليه' (why), 'إزّاي' (how)\n" +
+        "- 'عايز/عايزة' (want), 'بيعمل' (he does), 'دلوقتي' (now), 'كده' (like this)\n" +
+        "- 'أوي' (very), 'خالص' (at all / completely), 'يعني' (I mean / so)\n" +
+        "- Use 'ج' for the Egyptian 'g' sound where appropriate in colloquial spelling.\n" +
+        "- Replace idioms and expressions with natural Egyptian equivalents — never translate literally.\n" +
+        "- Preserve the speaker's register: Cairo street speech is different from educated/formal Egyptian.\n" +
+        "- NEVER write in Modern Standard Arabic (Fusha)."
       );
     case "arabic_levantine":
       return (
-        "Translate into Levantine Arabic as spoken in Lebanon and Syria (Shami). Write in Arabic script. " +
-        "Use natural Levantine dialect vocabulary and expressions — not Modern Standard Arabic. " +
-        "For example: use 'شو' not 'ماذا', 'هيك' not 'هكذا', 'كتير' not 'كثير'."
+        "TARGET: Levantine Arabic (Shami) as spoken in Lebanon and Syria — write in Arabic script.\n" +
+        "Key vocabulary markers:\n" +
+        "- 'شو' (what), 'مين' (who), 'وين' (where), 'إيمتى' (when), 'ليش' (why), 'كيف' (how)\n" +
+        "- 'بدّي' (I want), 'عم يعمل' (he is doing), 'هلّق' (now), 'هيك' (like this)\n" +
+        "- 'كتير' (very/a lot), 'منيح' (good), 'لأ' (no), 'يلاّ' (let's go/come on)\n" +
+        "- Lebanese and Syrian Shami have some differences — stay close to neutral Levantine if unclear.\n" +
+        "- Replace idioms and expressions with natural Shami equivalents — never translate literally.\n" +
+        "- NEVER write in Modern Standard Arabic (Fusha)."
       );
     case "arabic_gulf":
       return (
-        "Translate into Gulf Arabic as spoken in Saudi Arabia and the UAE (Khaleeji). Write in Arabic script. " +
-        "Use natural Gulf dialect vocabulary and expressions — not Modern Standard Arabic. " +
-        "For example: use 'وش' not 'ماذا', 'ذا' not 'هذا', 'زين' not 'جيد'."
+        "TARGET: Gulf Arabic (Khaleeji) as spoken in Saudi Arabia and the UAE — write in Arabic script.\n" +
+        "Key vocabulary markers:\n" +
+        "- 'وش/ايش' (what), 'مين' (who), 'وين' (where), 'متى' (when), 'ليش' (why), 'كيف' (how)\n" +
+        "- 'أبغى/أبي' (I want), 'يسوّي' (he does/makes), 'الحين' (now), 'جذي/جذا' (like this)\n" +
+        "- 'زين' (good), 'واجد' (a lot), 'يهال' (kids), 'يالله' (come on/let's go)\n" +
+        "- Replace idioms and expressions with natural Khaleeji equivalents — never translate literally.\n" +
+        "- NEVER write in Modern Standard Arabic (Fusha) unless the speaker is clearly being formal."
       );
     case "msa":
-      return "Translate into Modern Standard Arabic (Fusha). Write in Arabic script. Use formal, grammatically correct MSA suitable for subtitles.";
+      return (
+        "TARGET: Modern Standard Arabic (Fusha) — write in Arabic script.\n" +
+        "Use formal, grammatically correct MSA suitable for subtitles. " +
+        "Unlike the dialect instructions, MSA should be clear and formal — avoid colloquialisms. " +
+        "Still prioritize natural readability over overly academic phrasing."
+      );
     case "zh":
-      return "Translate into Simplified Chinese. Use Simplified Chinese characters (Mainland China standard).";
+      return "TARGET: Simplified Chinese — use Simplified Chinese characters (Mainland China standard). Write naturally as a native Mainland Chinese speaker would speak.";
     case "zh-TW":
-      return "Translate into Traditional Chinese. Use Traditional Chinese characters (Taiwan/Hong Kong standard).";
+      return "TARGET: Traditional Chinese — use Traditional Chinese characters (Taiwan/Hong Kong standard). Write naturally as a native Traditional Chinese speaker would speak.";
     default: {
       const lang = LANGUAGES.find((l) => l.value === targetLangValue);
-      return `Translate into ${lang?.promptName ?? targetLangValue}.`;
+      return `TARGET: ${lang?.promptName ?? targetLangValue}. Write as a native speaker would naturally speak — not how a textbook would write it.`;
     }
   }
 }
