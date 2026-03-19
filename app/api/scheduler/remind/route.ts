@@ -11,6 +11,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Resend } from "resend";
 import webpush from "web-push";
 
+export const dynamic = "force-dynamic";
+
 const SCHEDULER_URL = "https://darija-subtitle.vercel.app/dashboard/scheduler";
 
 const PLATFORM_LABELS: Record<string, string> = {
