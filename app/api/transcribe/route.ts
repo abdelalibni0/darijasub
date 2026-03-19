@@ -57,6 +57,8 @@ export async function POST(request: NextRequest) {
     const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
       model: "whisper-1",
+      language: "ar",
+      prompt: "Moroccan Darija dialect, mixed with French and English words. Fast casual speech. Speaker uses words like: walu, bzaf, mzyan, wach, kayn, bghit, smiya, dyal, dyali, hna, huma, nta, nti, ana, fin, kifach, 3lach, hit, walakin, yallah, safi, 3adl. French words mixed in naturally.",
       response_format: "verbose_json",
       timestamp_granularities: ["segment"],
     });
