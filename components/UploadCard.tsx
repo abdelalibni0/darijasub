@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { LANGUAGES, formatDetectedLanguage, type Language } from "@/lib/languages";
+import { parseSrtString, type SrtSegment } from "@/lib/srt";
 import ProgressSteps from "./ProgressSteps";
 
 // ── Language picker data ───────────────────────────────────────────────────────
@@ -46,16 +47,16 @@ const GROUPED = GROUP_ORDER.reduce<Record<LangGroup, Language[]>>(
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Status = "idle" | "uploading" | "transcribing" | "translating" | "done" | "error";
+type Status = "idle" | "uploading" | "transcribing" | "reviewing" | "translating" | "done" | "error";
 type Mode   = "transcribe" | "translate";
 
 function getSteps(mode: Mode) {
   return mode === "translate"
     ? [
-        { label: "Uploading file",       icon: "upload" as const },
-        { label: "Transcribing audio",   icon: "mic"    as const },
-        { label: "Translating subtitles",icon: "globe"  as const },
-        { label: "Ready to download",    icon: "check"  as const },
+        { label: "Uploading file",        icon: "upload" as const },
+        { label: "Transcribing audio",    icon: "mic"    as const },
+        { label: "Translating subtitles", icon: "globe"  as const },
+        { label: "Ready to download",     icon: "check"  as const },
       ]
     : [
         { label: "Uploading file",     icon: "upload" as const },
@@ -81,6 +82,9 @@ export default function UploadCard() {
   const [stepIndex, setStepIndex]       = useState(0);
   const [progress, setProgress]         = useState(0);
 
+  // Review step state
+  const [reviewSegs, setReviewSegs] = useState<SrtSegment[]>([]);
+
   // Language picker state
   const [langOpen, setLangOpen]   = useState(false);
   const [langQuery, setLangQuery] = useState("");
@@ -90,8 +94,9 @@ export default function UploadCard() {
   const inputRef            = useRef<HTMLInputElement>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const isProcessing = ["uploading", "transcribing", "translating"].includes(status);
-  const showProgress = isProcessing || status === "done";
+  const isProcessing  = ["uploading", "transcribing", "translating"].includes(status);
+  const isReviewing   = status === "reviewing";
+  const showProgress  = isProcessing || status === "done";
 
   const steps    = getSteps(mode);
   const statuses = steps.map((_, i) =>
@@ -174,9 +179,13 @@ export default function UploadCard() {
     setDetectedLang(null);
     setStepIndex(0);
     setProgress(0);
+    setReviewSegs([]);
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
     setDownloadUrl(null);
   };
+
+  const buildFilename = (originalName: string, suffix: string) =>
+    `${originalName.replace(/\.[^/.]+$/, "")}_${suffix}.srt`;
 
   // ── File selection ────────────────────────────────────────────────────────────
 
@@ -203,7 +212,54 @@ export default function UploadCard() {
     if (sel) acceptFile(sel);
   };
 
-  // ── Submit ────────────────────────────────────────────────────────────────────
+  // ── Finalize done (shared by transcribe-only and post-translation) ────────────
+
+  const finalizeDone = async (srtText: string, filename: string) => {
+    const downloadObjectUrl = URL.createObjectURL(
+      new Blob([srtText], { type: "text/plain;charset=utf-8" })
+    );
+
+    localStorage.removeItem("darijasub_video_url");
+    localStorage.setItem("darijasub_upload_ready", "false");
+    localStorage.setItem("darijasub_editor", JSON.stringify({
+      srtText,
+      audioUrl: URL.createObjectURL(file!),
+      filename: file!.name,
+    }));
+
+    try {
+      const exportUrlRes = await fetch("/api/upload-export-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file!.name, mimeType: file!.type }),
+      });
+      if (exportUrlRes.ok) {
+        const { signedUrl, storagePath: exportPath } = await exportUrlRes.json();
+        const putRes = await fetch(signedUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file!.type || "application/octet-stream" },
+          body: file!,
+        });
+        localStorage.setItem(
+          "darijasub_upload_ready",
+          putRes.ok ? "true" : "false"
+        );
+        if (putRes.ok) localStorage.setItem("darijasub_video_url", exportPath);
+      } else {
+        localStorage.setItem("darijasub_upload_ready", "false");
+      }
+    } catch {
+      localStorage.setItem("darijasub_upload_ready", "false");
+    }
+
+    setDownloadUrl(downloadObjectUrl);
+    setDownloadFilename(filename);
+    setStepIndex(steps.length);
+    setProgress(100);
+    setStatus("done");
+  };
+
+  // ── Submit (upload + transcribe) ──────────────────────────────────────────────
 
   const handleSubmit = async () => {
     if (!file) return;
@@ -235,13 +291,13 @@ export default function UploadCard() {
       setStepIndex(1); setProgress(25); setStatus("transcribing");
       startSlowFill(25, 70);
 
+      // Always transcribe-only here; translation happens after review
       const transcribeRes = await fetch("/api/transcribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           storagePath,
-          mode,
-          targetLang: mode === "translate" ? targetLang : undefined,
+          mode: "transcribe",
           originalName: file.name,
         }),
       });
@@ -252,71 +308,24 @@ export default function UploadCard() {
         throw new Error(body.error ?? `Server error ${transcribeRes.status}`);
       }
 
-      if (mode === "translate") {
-        setStepIndex(2); setProgress(75); setStatus("translating");
-        startSlowFill(75, 92);
-        await new Promise((r) => setTimeout(r, 400));
-        stopProgressInterval();
-      }
-
       const detected = transcribeRes.headers.get("X-Detected-Language");
       if (detected) setDetectedLang(formatDetectedLanguage(detected));
 
       const srtText = await transcribeRes.text();
-
       if (!srtText.trim()) {
         throw new Error("Server returned empty subtitle content — please try again");
       }
 
-      const downloadBlob      = new Blob([srtText], { type: "text/plain;charset=utf-8" });
-      const downloadObjectUrl = URL.createObjectURL(downloadBlob);
-
-      const disposition = transcribeRes.headers.get("Content-Disposition") ?? "";
-      const match       = disposition.match(/filename="([^"]+)"/);
-      const filename    = match?.[1] ?? `subtitles_${mode === "translate" ? targetLang : "transcribed"}.srt`;
-
-      // Store SRT + blob audio URL in localStorage for the editor first.
-      // Clear stale export state so the modal knows it needs to re-upload.
-      localStorage.removeItem("darijasub_video_url");
-      localStorage.setItem("darijasub_upload_ready", "false");
-      localStorage.setItem("darijasub_editor", JSON.stringify({
-        srtText,
-        audioUrl: URL.createObjectURL(file),
-        filename: file.name,
-      }));
-
-      // Upload original video to export-uploads for server-side video export.
-      try {
-        const exportUrlRes = await fetch("/api/upload-export-url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filename: file.name, mimeType: file.type }),
-        });
-        if (exportUrlRes.ok) {
-          const { signedUrl, storagePath: exportPath } = await exportUrlRes.json();
-          const putRes = await fetch(signedUrl, {
-            method: "PUT",
-            headers: { "Content-Type": file.type || "application/octet-stream" },
-            body: file,
-          });
-          if (putRes.ok) {
-            localStorage.setItem("darijasub_video_url", exportPath);
-            localStorage.setItem("darijasub_upload_ready", "true");
-          } else {
-            localStorage.setItem("darijasub_upload_ready", "false");
-          }
-        } else {
-          localStorage.setItem("darijasub_upload_ready", "false");
-        }
-      } catch {
-        localStorage.setItem("darijasub_upload_ready", "false");
+      if (mode === "translate") {
+        // Show review screen before translating
+        setReviewSegs(parseSrtString(srtText));
+        setProgress(70);
+        setStatus("reviewing");
+        return;
       }
 
-      setDownloadUrl(downloadObjectUrl);
-      setDownloadFilename(filename);
-      setStepIndex(steps.length);
-      setProgress(100);
-      setStatus("done");
+      // Transcribe-only: go straight to done
+      await finalizeDone(srtText, buildFilename(file.name, "transcribed"));
     } catch (err) {
       stopProgressInterval();
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -324,7 +333,46 @@ export default function UploadCard() {
     }
   };
 
+  // ── Confirm review → translate ────────────────────────────────────────────────
+
+  const handleConfirmTranslate = async (segs: SrtSegment[]) => {
+    if (!file) return;
+    try {
+      setStepIndex(2); setProgress(75); setStatus("translating");
+      startSlowFill(75, 92);
+
+      const translateRes = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          segments: segs,
+          targetLang,
+          detectedLanguage: detectedLang ?? "arabic",
+        }),
+      });
+      stopProgressInterval();
+
+      if (!translateRes.ok) {
+        const body = await translateRes.json().catch(() => ({}));
+        throw new Error(body.error ?? `Translation error ${translateRes.status}`);
+      }
+
+      const srtText = await translateRes.text();
+      if (!srtText.trim()) throw new Error("Translation returned empty content");
+
+      await finalizeDone(srtText, buildFilename(file.name, targetLang));
+    } catch (err) {
+      stopProgressInterval();
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setStatus("error");
+    }
+  };
+
+  const handleSkipReview = () => handleConfirmTranslate(reviewSegs);
+
   // ── Render ────────────────────────────────────────────────────────────────────
+
+  const locked = isProcessing || isReviewing;
 
   return (
     <div className="card p-6">
@@ -334,11 +382,12 @@ export default function UploadCard() {
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
-        onClick={() => !isProcessing && !showProgress && inputRef.current?.click()}
+        onClick={() => !locked && !showProgress && inputRef.current?.click()}
         className={`border-2 border-dashed rounded-xl p-10 text-center transition-all duration-200 ${
-          isProcessing ? "border-purple-500/30 bg-purple-500/5 cursor-default"
-          : dragging    ? "border-purple-500 bg-purple-500/10 cursor-pointer"
-          : file        ? "border-purple-500/40 bg-purple-500/5 cursor-pointer"
+          isProcessing  ? "border-purple-500/30 bg-purple-500/5 cursor-default"
+          : isReviewing ? "border-purple-500/30 bg-purple-500/5 cursor-default"
+          : dragging     ? "border-purple-500 bg-purple-500/10 cursor-pointer"
+          : file         ? "border-purple-500/40 bg-purple-500/5 cursor-pointer"
           : "border-white/15 hover:border-purple-500/40 hover:bg-white/3 cursor-pointer"
         }`}
       >
@@ -347,7 +396,7 @@ export default function UploadCard() {
           onChange={handleFileChange}
         />
 
-        {isProcessing ? (
+        {isProcessing || isReviewing ? (
           <p className="font-semibold text-white/60 text-sm">{file?.name}</p>
 
         ) : status === "done" && downloadUrl ? (
@@ -390,39 +439,41 @@ export default function UploadCard() {
         )}
       </div>
 
-      {/* Mode toggle */}
-      <div className="mt-5">
-        <div className="flex rounded-xl overflow-hidden border border-white/10 p-1 bg-white/5">
-          {(["transcribe", "translate"] as Mode[]).map((m) => (
-            <button key={m} type="button"
-              onClick={() => { setMode(m); resetResult(); }}
-              disabled={isProcessing}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed ${
-                mode === m ? "bg-purple-600 text-white shadow shadow-purple-900/40" : "text-white/50 hover:text-white/80"
-              }`}
-            >
-              {m === "transcribe" ? (
-                <>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                  Transcribe only
-                </>
-              ) : (
-                <>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
-                  </svg>
-                  Translate to
-                </>
-              )}
-            </button>
-          ))}
+      {/* Mode toggle — hidden during review */}
+      {!isReviewing && (
+        <div className="mt-5">
+          <div className="flex rounded-xl overflow-hidden border border-white/10 p-1 bg-white/5">
+            {(["transcribe", "translate"] as Mode[]).map((m) => (
+              <button key={m} type="button"
+                onClick={() => { setMode(m); resetResult(); }}
+                disabled={isProcessing}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed ${
+                  mode === m ? "bg-purple-600 text-white shadow shadow-purple-900/40" : "text-white/50 hover:text-white/80"
+                }`}
+              >
+                {m === "transcribe" ? (
+                  <>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                    Transcribe only
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                    </svg>
+                    Translate to
+                  </>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* ── Language picker — custom div-based dropdown, no <select> ── */}
-      {mode === "translate" && (
+      {/* Language picker — hidden during review */}
+      {mode === "translate" && !isReviewing && (
         <div ref={langRef} className="mt-3 relative">
 
           {/* Trigger button */}
@@ -533,8 +584,75 @@ export default function UploadCard() {
         </div>
       )}
 
+      {/* ── Review transcription ─────────────────────────────────────────────── */}
+      {isReviewing && (
+        <div className="mt-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="font-semibold text-white text-sm">Review Transcription</p>
+              <p className="text-xs text-white/40 mt-0.5">Fix any errors before translating</p>
+            </div>
+            <span className="text-xs text-white/30 bg-white/5 border border-white/10 rounded-full px-2.5 py-1">
+              {reviewSegs.length} segments
+            </span>
+          </div>
+
+          {/* Segment list */}
+          <div
+            className="overflow-y-auto rounded-xl border border-white/10 divide-y divide-white/5"
+            style={{ maxHeight: "340px", background: "rgba(255,255,255,0.02)" }}
+          >
+            {reviewSegs.map((seg, i) => (
+              <div key={seg.index} className="flex gap-3 px-3 py-2.5">
+                {/* Timestamp */}
+                <div className="shrink-0 text-xs text-white/25 font-mono pt-2 w-[4.5rem] leading-tight">
+                  {seg.start.slice(0, 8)}
+                </div>
+                {/* Editable text */}
+                <textarea
+                  value={seg.text}
+                  dir="auto"
+                  rows={Math.max(1, Math.ceil(seg.text.length / 45))}
+                  onChange={(e) => {
+                    const updated = [...reviewSegs];
+                    updated[i] = { ...updated[i], text: e.target.value };
+                    setReviewSegs(updated);
+                  }}
+                  className="flex-1 text-sm text-white bg-transparent resize-none outline-none rounded px-2 py-1 transition-colors leading-relaxed"
+                  style={{ minHeight: "2rem" }}
+                  onFocus={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                  onBlur={(e)  => (e.currentTarget.style.background = "transparent")}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Review actions */}
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={handleSkipReview}
+              className="flex-1 py-3 px-4 rounded-xl font-semibold text-sm transition-all border border-white/15 text-white/50 hover:text-white/80 hover:border-white/30"
+              style={{ background: "rgba(255,255,255,0.03)" }}
+            >
+              Skip Review
+            </button>
+            <button
+              type="button"
+              onClick={() => handleConfirmTranslate(reviewSegs)}
+              className="flex-[2] btn-primary flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+              </svg>
+              Looks Good, Translate →
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Generate button */}
-      {!showProgress && (
+      {!showProgress && !isReviewing && (
         <div className="mt-5">
           <button type="button" onClick={handleSubmit}
             disabled={!file || isProcessing}
