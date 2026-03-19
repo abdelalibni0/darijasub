@@ -108,7 +108,7 @@ export function getTranslationPrompt(
   detectedLanguage: string,
   targetLang: Language
 ): string {
-  const targetInstructions = getTargetInstructions(targetLang.value);
+  const targetInstructions = getTargetInstructions(targetLang.value, detectedLanguage);
 
   return (
     `You are an expert subtitle localizer. Your job is not to translate — it is to rewrite the content so it sounds completely natural to a native ${targetLang.promptName} speaker, as if it were originally written in that language.\n\n` +
@@ -137,8 +137,50 @@ export function getTranslationPrompt(
   );
 }
 
-function getTargetInstructions(targetLangValue: string): string {
+function getTargetInstructions(targetLangValue: string, sourceLanguage = ""): string {
+  const srcLower = sourceLanguage.toLowerCase();
+  const isArabicSource = srcLower === "arabic" || srcLower === "darija" || srcLower.includes("arab");
+
   switch (targetLangValue) {
+    case "en":
+      if (isArabicSource) {
+        return (
+          "TARGET: English — written for a YouTube/vlog audience, not a textbook.\n" +
+          "The source is Moroccan Darija (or Arabic dialect) mixed with French and sometimes English words. This is casual vlog content: travel, lifestyle, everyday moments.\n\n" +
+          "VOICE & TONE:\n" +
+          "- Write like a native English-speaking YouTuber narrating their own vlog — energetic, natural, conversational.\n" +
+          "- Use contractions always: 'it's', 'we're', 'I've', 'couldn't', 'that's'.\n" +
+          "- Short punchy sentences work better than long structured ones for this content.\n" +
+          "- Match the speaker's energy: excited = excited, chill = chill, funny = funny.\n\n" +
+          "DARIJA EXPRESSIONS — translate by MEANING, never literally:\n" +
+          "- 'walu / والو' → 'nothing', 'zero', 'nada', or 'not a thing' depending on context\n" +
+          "- 'bzaf / بزاف' → 'so much', 'a lot', 'tons of', 'way too much'\n" +
+          "- 'mzyan / مزيان' → 'great', 'nice', 'solid', 'pretty good'\n" +
+          "- '3adl / عدل' → 'exactly', 'for real', 'straight up', 'legit'\n" +
+          "- 'hit / حيت' → 'because', 'since', 'the thing is'\n" +
+          "- 'wach / واش' → question marker — translate by what's being asked, not the word itself\n" +
+          "- 'daba / دابا' → 'now', 'right now', 'at the moment'\n" +
+          "- 'ghir / غير' → 'just', 'only', 'literally just'\n" +
+          "- 'hadchi / هادشي' → 'this thing', 'this stuff', 'all of this'\n" +
+          "- 'fiha / فيها' → context-dependent — 'it's got it', 'there's something there', 'it's worth it'\n" +
+          "- 'labas / لابأس' → 'not bad', 'doing okay', 'pretty decent'\n" +
+          "- 'yallah / يالله' → 'let's go', 'come on', 'alright then'\n" +
+          "- 'safi / صافي' → 'done', 'that's it', 'all good', 'alright'\n" +
+          "- 'mashi mushkil / ماشي مشكل' → 'no problem', 'no worries', 'it's all good'\n\n" +
+          "KEEP NATURAL:\n" +
+          "- Money amounts: keep the numbers, translate the currency naturally (e.g. '50 dirhams', 'like 5 bucks worth')\n" +
+          "- Food names: keep the Moroccan/Arabic name and optionally add a brief descriptor if genuinely unclear (e.g. 'msemen — a kind of flatbread'). Don't over-explain.\n" +
+          "- Place names: keep as-is (Casablanca, Marrakech, Jemaa el-Fna, etc.)\n" +
+          "- French words in the source: translate them into English as part of the overall meaning — don't leave French in the English output.\n\n" +
+          "AVOID:\n" +
+          "- Stiff, formal phrasing ('It is very beautiful here' → 'it's stunning here')\n" +
+          "- Literal translations of Darija expressions that produce nonsense\n" +
+          "- Over-translating proper nouns or food names\n" +
+          "- Sounding like a news anchor or academic paper"
+        );
+      }
+      return "TARGET: English. Write naturally as a native English speaker would say it — conversational, with contractions, not textbook formal.";
+
     case "darija-ma":
       return (
         "TARGET: Moroccan Darija — write in Arabic script.\n" +
