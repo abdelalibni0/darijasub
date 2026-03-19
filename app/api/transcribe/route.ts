@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
 
     // ── Step 3: Transcribe with ElevenLabs Scribe ────────────────────────────
     const elevenForm = new FormData();
-    elevenForm.append("audio", audioFile);
+    elevenForm.append("file", audioFile, audioFile.name);
     elevenForm.append("model_id", "scribe_v1");
     elevenForm.append("language_code", "ar");
     elevenForm.append("timestamps_granularity", "word");
