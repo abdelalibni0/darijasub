@@ -111,6 +111,14 @@ export function getTranslationPrompt(
   const targetInstructions = getTargetInstructions(targetLang.value, detectedLanguage);
 
   return (
+    `OUTPUT FORMAT — READ THIS FIRST:\n` +
+    `Your entire response must be a single raw JSON array. Nothing before it. Nothing after it.\n` +
+    `No explanation. No markdown. No code fences. No commentary.\n` +
+    `First character: "[". Last character: "]". That is all.\n` +
+    `Format: [{"index": 1, "text": "<translation>"}, {"index": 2, "text": "<translation>"}, ...]\n` +
+    `- Return exactly the same number of objects as received.\n` +
+    `- Keep every "index" unchanged. Translate only "text".\n\n` +
+    `---\n\n` +
     `You are an expert subtitle localizer. Your job is not to translate — it is to rewrite the content so it sounds completely natural to a native ${targetLang.promptName} speaker, as if it were originally written in that language.\n\n` +
     `Source language: ${formatDetectedLanguage(detectedLanguage)}\n` +
     `Target language: ${targetLang.promptName}\n\n` +
@@ -118,22 +126,12 @@ export function getTranslationPrompt(
     `HOW TO TRANSLATE:\n\n` +
     `1. UNDERSTAND BEFORE YOU WRITE. Read the full batch first to understand the topic, context, and speaker's tone. Then translate each segment with that full context in mind — never in isolation.\n\n` +
     `2. TRANSLATE MEANING, NOT WORDS. Ask yourself: "What is this person actually trying to say?" Then write that — in the target language's own words, its own idioms, its own rhythm. Do not map words across.\n\n` +
-    `3. REPLACE IDIOMS AND SLANG WITH EQUIVALENTS. If the source uses a colloquial expression, a saying, or slang, find the natural equivalent in the target language. Never translate the expression literally — that produces nonsense. Example: "break a leg" in English should become the equivalent good-luck expression in the target language, not "casse une jambe".\n\n` +
-    `4. MATCH THE SPEAKER'S REGISTER EXACTLY. Casual → casual. Formal → formal. Humorous → humorous. Sarcastic → sarcastic. Emotional → emotional. A joke must still land as a joke. A rant must still feel like a rant. Preserve the speaker's personality and energy.\n\n` +
-    `5. HANDLE CODE-SWITCHING NATURALLY. The source may mix languages (e.g. Darija + French + English, Arabic + Amazigh). This is natural speech. Translate the overall meaning of the full utterance — do not translate each language fragment separately, and do not flag the mixing as an error.\n\n` +
-    `6. WRITE FOR THE EAR, NOT THE PAGE. Subtitles represent spoken language. Write how a real person would say something out loud — contractions, dropped words, natural phrasing. Avoid formal written register unless the speaker is being formal.\n\n` +
-    `7. NEVER PRODUCE MACHINE-TRANSLATION PATTERNS. Avoid calques (word-for-word structural copies), unnatural word order, and stiff phrasing. If a sentence sounds like Google Translate, rewrite it.\n\n` +
-    `8. KEEP SUBTITLES CONCISE. Cut filler words if needed. Never cut meaning. Each segment must be readable on screen in the time available.\n\n` +
-    `YOUR RESPONSE MUST BE A SINGLE RAW JSON ARRAY AND NOTHING ELSE.\n` +
-    `Do not write any text before the "[". Do not write any text after the "]".\n` +
-    `Do not use markdown. Do not use code fences. Do not explain anything.\n` +
-    `The very first character of your response must be "[" and the very last must be "]".\n\n` +
-    `Input format: [{"index": 1, "text": "..."}, {"index": 2, "text": "..."}, ...]\n` +
-    `Output format: [{"index": 1, "text": "<localized text>"}, {"index": 2, "text": "<localized text>"}, ...]\n\n` +
-    `JSON rules:\n` +
-    `- Return exactly the same number of objects as you received.\n` +
-    `- Keep every "index" value unchanged.\n` +
-    `- Translate only the "text" value of each object.`
+    `3. REPLACE IDIOMS AND SLANG WITH EQUIVALENTS. Find the natural equivalent in the target language. Never translate the expression literally.\n\n` +
+    `4. MATCH THE SPEAKER'S REGISTER EXACTLY. Casual → casual. Formal → formal. Humorous → humorous. Emotional → emotional. Preserve the speaker's personality and energy.\n\n` +
+    `5. HANDLE CODE-SWITCHING NATURALLY. The source may mix languages (e.g. Darija + French + English, Arabic + Amazigh). Translate the overall meaning — do not translate each fragment separately.\n\n` +
+    `6. WRITE FOR THE EAR, NOT THE PAGE. Use contractions, natural phrasing, how a real person actually speaks.\n\n` +
+    `7. KEEP SUBTITLES CONCISE. Cut filler words if needed. Never cut meaning.\n\n` +
+    `REMINDER: Respond with ONLY the JSON array. No text before "[". No text after "]".`
   );
 }
 
